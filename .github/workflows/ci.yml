@@ -43,6 +43,13 @@ jobs:
           sudo sysctl -w net.ipv4.ip_forward=1
       - run: make lab-up SCENARIO=all
       - run: make test-lab GO_TEST_FLAGS=-v
+      - run: make playground-up && make ui-check
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ui-screenshots
+          path: lab/.state/ui/
+          if-no-files-found: ignore
       - name: Lab logs
         if: failure()
         run: |

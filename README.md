@@ -4,7 +4,9 @@ Be a real node in several tailnets at once: with TUN, UDP and MagicDNS, no proxy
 tailweave detects conflicts between the tailnets, shows them, and lets you resolve
 them with a click.
 
-> **Status: experimental.** Nothing usable yet. The lab to develop it in works.
+> **Status: experimental.** On Linux, tailweave merges tailnets whose tailscaled
+> instances already run in network namespaces (see the lab): routing, collision
+> handling, MagicDNS and a small UI work. It does not manage the instances itself yet.
 
 ## Why
 
@@ -15,23 +17,25 @@ forward TCP, so WebRTC, QUIC and programs without proxy support don't work throu
 
 - **One Tailscale instance per tailnet**, each isolated in its own network stack
   (Linux: network namespace, macOS: backend in a Network Extension).
-- **One primary tailnet** keeps its real IPs. Every other tailnet is mapped to its
-  own address range, so identical `100.x` addresses don't clash.
-- **Own DNS service** that routes queries to the right tailnet by domain and returns
-  the mapped IPs.
-- **Daemon with UI:** add and log into tailnets, see status and peers, see and
-  resolve conflicts.
+- **One merged address space.** Every peer keeps its real tailnet IP and is routed into
+  the right instance. Only when the same IP exists in several tailnets is a device
+  remapped: automatically (the tailnet listed first keeps the IP, the others get an
+  address from `198.18.0.0/15`) or by hand in the UI.
+- **Own DNS service** replacing MagicDNS: names always resolve to the IP the device is
+  actually reachable at, so collisions only matter when you type raw IPs.
+- **Daemon with UI:** see tailnets, peers and conflicts, switch auto-mapping, map
+  devices by hand. Later: add and log into tailnets.
 
 ## Conflicts it detects
 
 | Conflict | Resolution options |
 | --- | --- |
-| Same IPs in several tailnets | Map a tailnet, switch primary tailnet, suggest a config change to the admin |
+| Same IPs in several tailnets | Remap automatically, or map a device to another IP by hand |
 | Overlapping subnet routes | Ignore or map the route |
 | Subnet route equals the local LAN | Ignore or map the route |
 | MagicDNS (`100.100.100.100`) | tailweave's DNS service takes over |
 | Several exit nodes | Allow only one |
-| Same DNS suffixes | Set a priority |
+| Same DNS names | The tailnet listed first wins |
 
 ## Development lab
 
@@ -55,7 +59,9 @@ make vm-up                    # macOS: Linux VM via Lima (skip on Linux)
 make lab-up SCENARIO=all      # base | subnets | exit-nodes | dns-suffix | all
 make lab-status
 make playground-up            # two plain tailscaleds in netns tw-a / tw-b
+make run                      # tailweave on top of them, UI on 127.0.0.1:5250
 make test-lab
+make ui-check                 # click through the UI in headless Chromium
 make lab-reset
 ```
 

@@ -8,6 +8,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"net/netip"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
@@ -98,4 +99,18 @@ func RequireLab(t testing.TB) {
 			t.Skipf("lab not running (headscale-%s unavailable), run `make lab-up`", tn)
 		}
 	}
+}
+
+// Scenario returns the scenario the lab was started with (make lab-up SCENARIO=...).
+func Scenario() string {
+	b, err := os.ReadFile(filepath.Join(Root(), "lab", ".state", "scenario.env"))
+	if err != nil {
+		return ""
+	}
+	for _, l := range strings.Split(string(b), "\n") {
+		if v, ok := strings.CutPrefix(l, "SCENARIO="); ok {
+			return v
+		}
+	}
+	return ""
 }

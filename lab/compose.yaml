@@ -125,6 +125,14 @@ services:
     environment: { <<: *peer-b-env, TS_HOSTNAME: peer-b2 }
     volumes: [peer-b2:/var/lib/tailscale]
     networks: [lab]
+  # Only in tailnet B and started last, so its IP does not collide with a peer in A.
+  peer-b3:
+    <<: *peer
+    container_name: peer-b3
+    hostname: peer-b3
+    environment: { <<: *peer-b-env, TS_HOSTNAME: peer-b3 }
+    volumes: [peer-b3:/var/lib/tailscale]
+    networks: [lab]
   router-b:
     <<: *peer
     profiles: [subnets]
@@ -170,5 +178,6 @@ volumes:
   exit-a:
   peer-b1:
   peer-b2:
+  peer-b3:
   router-b:
   exit-b:

@@ -1,0 +1,168 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>tailweave</title>
+<style>
+  :root {
+    --bg: #f7f7f5; --panel: #fff; --text: #1d1d1b; --muted: #6b6b66; --line: #e3e3de;
+    --accent: #2f5fd0; --ok: #23824a; --warn: #a86400; --bad: #c0352b; --chip: #eef0f6;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #151514; --panel: #1e1e1c; --text: #ececea; --muted: #9a9a94; --line: #33332f;
+      --accent: #7ea2ff; --ok: #5fc58a; --warn: #e0a33a; --bad: #ff7b6e; --chip: #262a36;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text);
+    font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  main { max-width: 1100px; margin: 0 auto; padding: 24px 16px 48px; }
+  header { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; margin-bottom: 20px; }
+  h1 { font-size: 20px; margin: 0; margin-right: auto; }
+  h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted);
+    margin: 28px 0 10px; font-weight: 600; }
+  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; }
+  .tailnets { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 12px; }
+  .tailnet { padding: 12px 14px; }
+  .tailnet b { font-size: 15px; }
+  .muted { color: var(--muted); }
+  .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13px; }
+  .err { color: var(--bad); }
+  .conflict { padding: 10px 14px; border-left: 3px solid var(--bad); margin-bottom: 8px; }
+  .conflict.resolved { border-left-color: var(--warn); }
+  .table-wrap { overflow-x: auto; }
+  table { width: 100%; border-collapse: collapse; }
+  th, td { text-align: left; padding: 8px 12px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+  th { font-weight: 600; color: var(--muted); font-size: 12px; }
+  tr:last-child td { border-bottom: 0; }
+  .chip { display: inline-block; padding: 1px 8px; border-radius: 99px; background: var(--chip); font-size: 12px; }
+  .chip.ok { color: var(--ok); } .chip.warn { color: var(--warn); } .chip.bad { color: var(--bad); }
+  .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; background: var(--muted); }
+  .dot.on { background: var(--ok); }
+  button { font: inherit; border: 1px solid var(--line); background: var(--panel); color: var(--text);
+    border-radius: 6px; padding: 3px 10px; cursor: pointer; }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  input[type=text] { font: inherit; padding: 3px 8px; border-radius: 6px; border: 1px solid var(--line);
+    background: var(--bg); color: var(--text); width: 140px; }
+  label.toggle { display: flex; gap: 8px; align-items: center; cursor: pointer; }
+  #msg { color: var(--bad); min-height: 1.4em; }
+  .empty { padding: 12px 14px; color: var(--muted); }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>tailweave</h1>
+    <span class="muted">DNS <span class="mono" id="dns"></span></span>
+    <label class="toggle"><input type="checkbox" id="automap"> Remap colliding IPs automatically</label>
+  </header>
+  <div id="msg"></div>
+
+  <div class="tailnets" id="tailnets"></div>
+
+  <h2>Conflicts</h2>
+  <div id="conflicts"></div>
+
+  <h2>Devices</h2>
+  <div class="panel table-wrap">
+    <table>
+      <thead><tr><th>Device</th><th>Tailnet</th><th>Name</th><th>Real IP</th><th>Reachable at</th><th></th></tr></thead>
+      <tbody id="devices"></tbody>
+    </table>
+  </div>
+</main>
+<script>
+const $ = id => document.getElementById(id);
+const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+let state = null, editing = null; // editing: "tailnet/peer" while a map form is open
+
+async function api(method, path, body) {
+  const r = await fetch(path, {method, headers: {"Content-Type": "application/json"},
+    body: body === undefined ? undefined : JSON.stringify(body)});
+  if (!r.ok) throw new Error((await r.text()).trim() || r.statusText);
+  return r.json();
+}
+
+async function act(method, path, body) {
+  try {
+    state = await api(method, path, body);
+    $("msg").textContent = "";
+    editing = null;
+    render();
+  } catch (e) { $("msg").textContent = e.message; }
+}
+
+function render() {
+  const s = state;
+  $("dns").textContent = s.dns;
+  $("automap").checked = s.autoMap;
+
+  $("tailnets").innerHTML = s.tailnets.map(t => `
+    <div class="panel tailnet">
+      <b>${esc(t.name)}</b> <span class="muted">${esc(t.domain || "no MagicDNS")}</span><br>
+      <span class="muted">this machine:</span> ${esc(t.self || "–")} <span class="mono">${esc(t.ip)}</span>
+      ${t.error ? `<div class="err">${esc(t.error)}</div>` : ""}
+    </div>`).join("");
+
+  const cs = s.conflicts || [];
+  $("conflicts").innerHTML = cs.length ? cs.map(c => `
+    <div class="panel conflict ${c.resolved ? "resolved" : ""}">
+      <span class="chip ${c.resolved ? "warn" : "bad"}">${c.kind === "ip" ? "same IP" : c.kind === "name" ? "same name" : "mapping"}</span>
+      <span class="mono">${esc(c.key)}</span>:
+      ${c.devices.map(d => `${esc(d.name)} <span class="muted">(${esc(d.tailnet)})</span>`).join(", ")}
+      — ${esc(c.message)}
+    </div>`).join("") : `<div class="panel empty">No conflicts.</div>`;
+
+  $("devices").innerHTML = (s.devices || []).map(d => {
+    const key = `${d.tailnet}/${d.peer}`;
+    let at = d.routedIP ? `<span class="mono">${esc(d.routedIP)}</span>` : `<span class="chip bad">not routed</span>`;
+    if (d.mapping) at += ` <span class="chip ${d.mapping.auto ? "warn" : "ok"}">${d.mapping.auto ? "auto-mapped" : "mapped"}</span>`;
+    let actions;
+    if (editing === key) {
+      actions = `<input type="text" id="mapip" value="${esc(s.suggestion)}" placeholder="IP">
+        <button class="primary" data-save="${esc(key)}">Map</button> <button data-cancel>Cancel</button>`;
+    } else {
+      actions = `<button data-edit="${esc(key)}">Map to…</button>` +
+        (d.mapping ? ` <button data-unmap="${esc(key)}">Unmap</button>` : "");
+    }
+    return `<tr>
+      <td><span class="dot ${d.online ? "on" : ""}"></span>${esc(d.name)}</td>
+      <td>${esc(d.tailnet)}</td>
+      <td class="mono">${esc(d.dnsName)}</td>
+      <td class="mono">${esc(d.realIP)}</td>
+      <td>${at}</td>
+      <td>${actions}</td></tr>`;
+  }).join("");
+  if (editing) $("mapip")?.focus();
+}
+
+document.addEventListener("click", e => {
+  const t = e.target.closest("button");
+  if (!t) return;
+  if (t.dataset.edit) { editing = t.dataset.edit; render(); }
+  if (t.dataset.cancel !== undefined) { editing = null; render(); }
+  if (t.dataset.unmap) act("DELETE", "/api/mappings/" + t.dataset.unmap.split("/").map(encodeURIComponent).join("/"));
+  if (t.dataset.save) {
+    const [tailnet, peer] = t.dataset.save.split("/");
+    const ip = $("mapip").value.trim();
+    act("POST", "/api/mappings", ip ? {tailnet, peer, ip} : {tailnet, peer});
+  }
+});
+document.addEventListener("keydown", e => {
+  if (e.target.id === "mapip" && e.key === "Enter") document.querySelector("[data-save]")?.click();
+  if (e.key === "Escape" && editing) { editing = null; render(); }
+});
+$("automap").addEventListener("change", e => act("PUT", "/api/options", {autoMap: e.target.checked}));
+
+async function poll() {
+  try {
+    if (!editing) { state = await api("GET", "/api/state"); render(); }
+  } catch (e) { $("msg").textContent = "tailweave not reachable: " + e.message; }
+}
+poll();
+setInterval(poll, 3000);
+</script>
+</body>
+</html>

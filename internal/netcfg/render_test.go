@@ -1,0 +1,61 @@
+package netcfg
+
+import (
+	"net/netip"
+	"testing"
+
+	"github.com/Nikiosna/tailweave/internal/weave"
+)
+
+func ip(s string) netip.Addr { return netip.MustParseAddr(s) }
+
+var (
+	plan = weave.Plan{Routes: map[netip.Addr]weave.Target{
+		ip("198.18.0.1"): {Tailnet: "b", IP: ip("100.64.0.1")},
+		ip("100.64.0.2"): {Tailnet: "b", IP: ip("100.64.0.2")},
+		ip("100.64.0.1"): {Tailnet: "a", IP: ip("100.64.0.1")},
+	}}
+	nss = []Namespace{
+		{Tailnet: "a", Netns: "tw-a", Gateway: ip("10.200.1.2"), Tun: "ts-a"},
+		{Tailnet: "b", Netns: "tw-b", Gateway: ip("10.200.2.2"), Tun: "ts-b"},
+	}
+)
+
+func TestHostRoutes(t *testing.T) {
+	got, err := HostRoutes(plan, nss, []netip.Prefix{CGNAT, netip.MustParsePrefix("198.18.0.0/15")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := `route flush table 5250
+route replace unreachable 100.64.0.0/10 table 5250
+route replace unreachable 198.18.0.0/15 table 5250
+route replace 100.64.0.1/32 via 10.200.1.2 table 5250
+route replace 100.64.0.2/32 via 10.200.2.2 table 5250
+route replace 198.18.0.1/32 via 10.200.2.2 table 5250
+`
+	if got != want {
+		t.Errorf("got:\n%s\nwant:\n%s", got, want)
+	}
+	if _, err := HostRoutes(plan, nss[:1], nil); err == nil {
+		t.Error("expected error for a tailnet without namespace")
+	}
+}
+
+func TestNamespaceRules(t *testing.T) {
+	want := `table inet tailweave
+delete table inet tailweave
+table inet tailweave {
+	chain prerouting {
+		type nat hook prerouting priority dstnat; policy accept;
+		ip daddr 198.18.0.1 dnat ip to 100.64.0.1
+	}
+	chain postrouting {
+		type nat hook postrouting priority srcnat; policy accept;
+		oifname "ts-b" ip saddr != 100.64.0.0/10 masquerade
+	}
+}
+`
+	if got := NamespaceRules(plan, nss[1]); got != want {
+		t.Errorf("got:\n%s\nwant:\n%s", got, want)
+	}
+}

@@ -44,8 +44,9 @@ load_scenario
 log "starting peers"
 compose build
 # One at a time, so IP allocation is deterministic: peer-a1 and peer-b1 both get 100.64.0.1.
+# peer-b3 comes last: B then has one more node than A, so its IP is free in A.
 enabled=" $(compose config --services | tr '\n' ' ') "
-for p in peer-a1 peer-b1 peer-a2 peer-b2 router-a router-b exit-a exit-b; do
+for p in peer-a1 peer-b1 peer-a2 peer-b2 router-a router-b exit-a exit-b peer-b3; do
 	[[ $enabled == *" $p "* ]] || continue
 	compose up -d --no-deps "$p"
 	wait_for 90 "$p to come online" \

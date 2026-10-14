@@ -18,7 +18,7 @@ endif
 LAB := $(IN_LAB) lab/scripts
 
 .PHONY: help vm-up vm-down vm-destroy sh lab-up lab-status lab-reset playground-up playground-down \
-	build test test-lab lint fmt
+	run ui-check ui-tunnel build test test-lab lint fmt
 
 help: ## Show targets
 	@grep -hE '^[a-z-]+:.*## ' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  %-16s %s\n", $$1, $$2}'
@@ -56,6 +56,15 @@ playground-up: ## Two tailscaled in two netns, one per tailnet (no tailweave)
 playground-down: ## Remove playground namespaces
 	$(LAB)/netns-playground.sh down
 
+run: build ## Run tailweave against the playground (UI on 127.0.0.1:5250 in the VM)
+	$(IN_LAB) sudo bin/tailweave run -config lab/tailweave.json
+
+ui-check: ## Click through the UI in headless Chromium, screenshots in lab/.state/ui
+	$(SH) 'lab/scripts/ui-check.sh'
+
+ui-tunnel: ## macOS: make the UI of `make run` reachable at http://127.0.0.1:5250 on the Mac
+	ssh -F $(HOME)/.lima/$(VM)/ssh.config -N -L 5250:127.0.0.1:5250 lima-$(VM)
+
 # --- Go --------------------------------------------------------------------
 
 build: ## Build binaries into ./bin
@@ -65,7 +74,7 @@ test: ## Unit tests
 	$(SH) 'go test $(GO_TEST_FLAGS) ./...'
 
 test-lab: ## Integration tests against the running lab (make lab-up first)
-	$(SH) 'go test -tags lab -count=1 $(GO_TEST_FLAGS) ./...'
+	$(SH) 'go test -tags lab -count=1 -p 1 $(GO_TEST_FLAGS) ./...'
 
 lint: ## go vet + golangci-lint (if installed)
 	$(SH) 'go vet ./... && (command -v golangci-lint >/dev/null && golangci-lint run || true)'

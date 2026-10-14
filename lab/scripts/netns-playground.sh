@@ -16,6 +16,15 @@ idx() { case $1 in a) echo 1 ;; b) echo 2 ;; *) die "unknown tailnet $1" ;; esac
 
 ts() { local net=$1; shift; $SUDO tailscale --socket="$RUN_DIR/$net.sock" "$@"; }
 
+# Remove the playground's nodes from headscale, so old runs do not linger as offline peers.
+forget_dut() {
+	local net=$1 id
+	for id in $(hs "$net" nodes list -o json | jq -r --arg p "dut-$net" \
+		'(. // [])[] | select(.given_name | startswith($p)) | .id'); do
+		hs "$net" nodes delete --identifier "$id" --force >/dev/null
+	done
+}
+
 up_ns() {
 	local net=$1 i; i=$(idx "$net")
 	local ns=tw-$net host=tw-$net-h peer=tw-$net-n
@@ -33,6 +42,7 @@ up_ns() {
 		echo "nameserver 1.1.1.1" | $SUDO tee "/etc/netns/$ns/resolv.conf" >/dev/null
 	fi
 	$SUDO mkdir -p "$RUN_DIR" "$VAR_DIR/$net"
+	$SUDO test -f "$VAR_DIR/$net/tailscaled.state" || forget_dut "$net"
 	if ! { [ -f "$RUN_DIR/$net.pid" ] && $SUDO kill -0 "$(cat "$RUN_DIR/$net.pid")" 2>/dev/null; }; then
 		$SUDO sh -c "ip netns exec $ns tailscaled --tun=ts-$net --statedir=$VAR_DIR/$net \
 			--socket=$RUN_DIR/$net.sock --port=$((41640 + i)) >$VAR_DIR/$net/tailscaled.log 2>&1 &
@@ -64,8 +74,12 @@ up)
 down)
 	for net in "${TAILNETS[@]}"; do
 		[ -f "$RUN_DIR/$net.pid" ] && $SUDO kill "$(cat "$RUN_DIR/$net.pid")" 2>/dev/null || true
+		# Also catch instances whose pid file got lost, e.g. after an interrupted run.
+		$SUDO pkill -f "^tailscaled .*--socket=$RUN_DIR/$net.sock" || true
 		$SUDO ip netns del "tw-$net" 2>/dev/null || true
+		$SUDO ip link del "tw-$net-h" 2>/dev/null || true
 		$SUDO rm -rf "/etc/netns/tw-$net" "$VAR_DIR/$net" "$RUN_DIR/$net.pid"
+		forget_dut "$net" || true
 	done
 	while $SUDO iptables -t nat -C POSTROUTING -s 10.200.0.0/16 ! -o tw-+ -j MASQUERADE 2>/dev/null; do
 		nat_rules -D
