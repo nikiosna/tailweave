@@ -38,7 +38,20 @@ no personal paths. Commit locally only; pushing is done by the maintainer.
      namespaces, or from a tailnet out of its namespace (`TestIsolation`)
    - [ ] Inbound: peers connecting to services on the host
    - [ ] Remaining conflicts: subnet routes (same merge model), exit nodes
-3. **macOS version** as a Network Extension *(later; Lima can also run macOS VMs)*
+3. **macOS version** *(in progress)*
+   - [x] Backend `tsnet` (`internal/engine`, `internal/router`, `internal/hostnet`): one
+     in-process tsnet engine per tailnet, each with an in-memory TUN, behind a userspace
+     router that owns one host TUN (utun on macOS) and NATs 1:1 by the weave plan; flow
+     tracking keeps the isolation rules. Runs on Linux too (`"backend": "tsnet"`); the lab
+     tests pass with it there
+   - [x] macOS host setup: utun address, routes for 100.64.0.0/10 and the pool, DNS
+     service on a lo0 alias, resolver registration via `scutil`; cross-built from the
+     Linux VM
+   - [ ] macOS VM in the lab (`make mac-vm-up`, `make mac-test-lab`) green
+   - [ ] Network Extension instead of a root daemon with utun (same router, packets
+     from `NEPacketTunnelFlow`)
+4. **Linux on the tsnet core**: make `tsnet` the default on Linux too, then drop the netns
+   backend (`internal/instance`, most of `internal/netcfg`)
 
 Keep this list current when finishing or starting a step.
 
@@ -50,6 +63,15 @@ Keep this list current when finishing or starting a step.
   hosts alike, so the lab never touches the host's network. The repo is mounted at the
   same path: edit on the host, run via `make`, which wraps `limactl shell`
   automatically. `NO_VM=1` runs targets directly on a Linux host (used by CI).
+- Backends: `netns` (default on Linux: tailscaled per network namespace, packages
+  `instance` and `netcfg`) and `tsnet` (default elsewhere: `engine`, `router`,
+  `hostnet`). The daemon talks to both through the `backend` interface in
+  `internal/daemon/backend.go`.
+- macOS work happens in a second Lima VM `tailweave-mac` with macOS (`make mac-vm-up`,
+  Apple Silicon only; the first start downloads a ~17 GB restore image). The lab stays
+  in the Linux VM; `lab/scripts/mac-setup.sh` routes the macOS VM to it over a shared
+  vzNAT network. There is no Go in the macOS VM: `make mac-build` cross-compiles
+  `bin/darwin/tailweave` and the lab test binary in the Linux VM.
 - Ad-hoc commands in the VM: `limactl shell --workdir $PWD tailweave -- <cmd>`
   (use `bash -lc '...'` when Go is needed; PATH comes from /etc/profile.d/go.sh).
 - `make help` lists all targets.
@@ -64,7 +86,11 @@ Keep this list current when finishing or starting a step.
   `sso@example.com`, password `lab`). headscale only starts once Dex answers and restarts
   until then. Lab IPs are not reachable from the Mac, so complete an SSO login inside the
   VM: `lab/scripts/sso-login.sh <url>` signs in with headless Chromium and clicks
-  headscale's "Confirm registration".
+  headscale's "Confirm registration". Tests do the same over plain HTTP
+  (`labtest.SSOLogin`), so they need no browser.
+- `bootstrap.sh` writes the preauth keys and headscale API keys to `lab/.state/keys.env`.
+  Lab tests read them from there and use headscale's REST API, so they also run in the
+  macOS VM, which has no Docker.
 - Peers start one by one, so addresses are deterministic: peer-a1/peer-b1 are
   100.64.0.1, peer-a2/peer-b2 100.64.0.2, routers .3, exit nodes .4. peer-b3 exists only
   in tailnet B and starts last, so its IP does not collide with a peer in A.
@@ -84,6 +110,8 @@ Keep this list current when finishing or starting a step.
   second shell (`make sh`) with `sudo bin/tailweave status` etc.
   `make ui` starts the optional web UI, `make ui-tunnel` makes it reachable on the host
   at http://127.0.0.1:5250.
+- `make mac-run` / `make mac-login` do the same in the macOS VM (`make mac-sh`, then
+  `sudo bin/darwin/tailweave status`).
 - `make ui-check` clicks through the UI in headless Chromium (Playwright, installed into
   `/opt/tailweave-browser` in the VM on first use by `ensure_playwright` in
   `lab/scripts/common.sh`) and checks the effect on DNS.
@@ -92,9 +120,12 @@ Keep this list current when finishing or starting a step.
 ### Tests
 
 - `make test`: unit tests. `make test-lab`: integration tests with build tag `lab`,
-  need a running lab. Helpers in `internal/labtest`. Lab test packages run one at a
-  time (`-p 1`) because they share the lab and the host's network setup. Tests log in
-  as `dut-<net>` and delete those nodes from headscale afterwards.
+  need a running lab; the daemon tests run once per backend (`TAILWEAVE_BACKEND`).
+  Helpers in `internal/labtest`. Lab test packages run one at a time (`-p 1`) because
+  they share the lab and the host's network setup. Tests log in as `dut-<net>` and
+  delete those nodes from headscale afterwards. `make mac-test-lab` runs the daemon tests
+  in the macOS VM (`$TAILWEAVE_BIN` points them to the cross-built binary). Platform
+  specific checks live in `platform_<os>_lab_test.go`.
 - CI (`.github/workflows/ci.yml`) runs both; the lab job has not run yet because
   there is no GitHub repository so far.
 
@@ -121,7 +152,21 @@ Keep this list current when finishing or starting a step.
   the namespaces stay on and let the forwarded host traffic through.
 - Each namespace gets `/etc/netns/<ns>/resolv.conf` with the host's real upstream servers
   (from `/run/systemd/resolve/resolv.conf`), so tailscaled can reach its control server.
-- Pinned versions: headscale 0.29.4, tailscale 1.102.5, Dex v2.45.0, Go 1.27.2,
-  Playwright 1.64.0 (in `lab/compose.yaml`, `lab/lima/tailweave.yaml`,
-  `lab/scripts/common.sh`, CI). Bump them
-  together.
+- The tsnet backend owns one TUN (`tailweave0` on Linux, the next free `utun` on macOS)
+  with the first address of `transit` (10.201.0.1). Only 100.64.0.0/10 and the pool are
+  routed into it (Linux: table 5250 with `iif lo`); the router drops everything not
+  from 10.201.0.1, anything for an unrouted IP, and packets from a tailnet that answer
+  no flow the host opened. On macOS the DNS address sits on lo0 and the resolver
+  settings under `State:/Network/Service/tailweave/DNS` (`scutil`); all of it goes away
+  on exit. It turns off tsnet's log upload to Tailscale (`envknob.SetNoLogsNoSupport`).
+- Lima's macOS guests have no passwordless sudo; `mac-setup.sh` adds
+  `/etc/sudoers.d/tailweave-lab` once, with the password from `~/password` in the guest.
+- On macOS hosts `make vm-up` gives the Linux VM a vzNAT network (`lima0`) next to the
+  default one; an older VM gets it with `limactl stop tailweave && limactl edit
+  tailweave --set '.networks=[{"vzNAT":true}]'`. `mac-setup.sh` lets that interface
+  forward to the lab bridge `twlab0` (DOCKER-USER) and adds the route in the macOS VM;
+  both are gone after a reboot, so the mac targets run it again.
+- Pinned versions: headscale 0.29.4, tailscale 1.102.5 (also the `tailscale.com` Go
+  module), Dex v2.45.0, Go 1.27.2, Playwright 1.64.0 (in `lab/compose.yaml`,
+  `lab/lima/tailweave.yaml`, `lab/scripts/common.sh`, `go.mod`, CI), macOS 27 for the
+  macOS VM. Bump them together.

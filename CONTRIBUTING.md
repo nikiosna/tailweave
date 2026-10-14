@@ -24,6 +24,15 @@ To run directly on a Linux host instead (as CI does), set `NO_VM=1`, e.g.
 Docker (with compose), Go, `tailscale`/`tailscaled`, iproute2, iptables, jq and
 passwordless sudo, and no Tailscale client of your own running.
 
+The macOS version is tested in a second Lima VM running macOS (Apple Silicon host,
+macOS at least as new as the guest). It joins the same lab, which keeps running in the
+Linux VM:
+
+```sh
+make mac-vm-up      # create the macOS VM (downloads a ~17 GB restore image once)
+make mac-test-lab   # integration tests in the macOS VM
+```
+
 ## Conventions
 
 - `gofmt`, `go vet` clean

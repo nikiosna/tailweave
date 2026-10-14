@@ -6,7 +6,9 @@ them from the command line.
 
 > **Status: experimental.** On Linux, tailweave runs one tailscaled per tailnet in its own
 > network namespace and merges the tailnets: login via web link (SSO) or preauth key,
-> routing, collision handling, MagicDNS, a CLI and an optional web UI work.
+> routing, collision handling, MagicDNS, a CLI and an optional web UI work. A second
+> backend that needs no namespaces (Tailscale engines in-process behind a userspace
+> router) brings the same to macOS; it is being tested there now.
 
 ## Why
 
@@ -15,8 +17,11 @@ forward TCP, so WebRTC, QUIC and programs without proxy support don't work throu
 
 ## How it is supposed to work
 
-- **One Tailscale instance per tailnet**, each isolated in its own network stack
-  (Linux: network namespace, macOS: backend in a Network Extension).
+- **One Tailscale instance per tailnet**, each isolated in its own network stack.
+  Linux: a tailscaled per network namespace. macOS (and optionally Linux): a Tailscale
+  engine per tailnet inside the daemon, each with a TUN of its own in memory; a
+  userspace router behind a single system TUN hands every packet to the right engine.
+  Later this moves into a Network Extension.
 - **One merged address space.** Every peer keeps its real tailnet IP and is routed into
   the right instance. Only when the same IP exists in several tailnets is a device
   remapped: automatically (the tailnet listed first keeps the IP, the others get an
@@ -89,6 +94,15 @@ make ui                       # optional web UI on 127.0.0.1:5250 (make ui-tunne
 make test-lab
 make ui-check                 # click through the UI in headless Chromium
 make lab-reset
+```
+
+On an Apple Silicon Mac, a second VM runs macOS as the device under test, against the
+same lab:
+
+```sh
+make mac-vm-up                # macOS VM via Lima, routed to the lab in the Linux VM
+make mac-test-lab
+make mac-run                  # the daemon in the macOS VM; make mac-login, make mac-sh
 ```
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for requirements.
