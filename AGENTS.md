@@ -32,7 +32,8 @@ no personal paths. Commit locally only; pushing is done by the maintainer.
      supervised tailscaled, and logs in with a preauth key (`-auth-key file:|-`);
      `logout`, `remove`; tailnets live in the state file and survive restarts
      (`TestWeave`, `TestLifecycle`)
-   - [ ] SSO login via web link, tested against an OIDC provider (Dex) in the lab
+   - [x] SSO login via web link: without a key, `tailweave login` prints the control
+     server's login URL and waits; tested against Dex in the lab (`TestLoginSSO`)
    - [ ] Inbound: peers connecting to services on the host
    - [ ] Remaining conflicts: subnet routes (same merge model), exit nodes
 3. **macOS version** as a Network Extension *(later; Lima can also run macOS VMs)*
@@ -57,6 +58,11 @@ Keep this list current when finishing or starting a step.
   `make lab-reset`. Definitions in `lab/compose.yaml`, scripts in `lab/scripts/`.
 - headscale-a at http://172.30.0.10:8080, headscale-b at http://172.30.0.11:8080.
   `lab/scripts/keys.sh <a|b>` prints login server and a reusable preauth key.
+- Dex at http://172.30.0.12:5556/dex is the OIDC provider of both headscales (user
+  `sso@example.com`, password `lab`). headscale only starts once Dex answers and restarts
+  until then. Lab IPs are not reachable from the Mac, so complete an SSO login inside the
+  VM: `lab/scripts/sso-login.sh <url>` signs in with headless Chromium and clicks
+  headscale's "Confirm registration".
 - Peers start one by one, so addresses are deterministic: peer-a1/peer-b1 are
   100.64.0.1, peer-a2/peer-b2 100.64.0.2, routers .3, exit nodes .4. peer-b3 exists only
   in tailnet B and starts last, so its IP does not collide with a peer in A.
@@ -77,7 +83,8 @@ Keep this list current when finishing or starting a step.
   `make ui` starts the optional web UI, `make ui-tunnel` makes it reachable on the host
   at http://127.0.0.1:5250.
 - `make ui-check` clicks through the UI in headless Chromium (Playwright, installed into
-  `/opt/tailweave-browser` in the VM on first use) and checks the effect on DNS.
+  `/opt/tailweave-browser` in the VM on first use by `ensure_playwright` in
+  `lab/scripts/common.sh`) and checks the effect on DNS.
   Screenshots land in `lab/.state/ui/`; look at them after UI changes.
 
 ### Tests
@@ -110,6 +117,7 @@ Keep this list current when finishing or starting a step.
   the namespaces stay on and let the forwarded host traffic through.
 - Each namespace gets `/etc/netns/<ns>/resolv.conf` with the host's real upstream servers
   (from `/run/systemd/resolve/resolv.conf`), so tailscaled can reach its control server.
-- Pinned versions: headscale 0.29.4, tailscale 1.102.5, Go 1.27.2, Playwright 1.64.0 (in
-  `lab/compose.yaml`, `lab/lima/tailweave.yaml`, `lab/scripts/ui-check.sh`, CI). Bump them
+- Pinned versions: headscale 0.29.4, tailscale 1.102.5, Dex v2.45.0, Go 1.27.2,
+  Playwright 1.64.0 (in `lab/compose.yaml`, `lab/lima/tailweave.yaml`,
+  `lab/scripts/common.sh`, CI). Bump them
   together.

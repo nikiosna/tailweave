@@ -5,8 +5,8 @@ tailweave detects conflicts between the tailnets, shows them, and lets you resol
 them from the command line.
 
 > **Status: experimental.** On Linux, tailweave runs one tailscaled per tailnet in its own
-> network namespace and merges the tailnets: login with a preauth key, routing, collision
-> handling, MagicDNS, a CLI and an optional web UI work.
+> network namespace and merges the tailnets: login via web link (SSO) or preauth key,
+> routing, collision handling, MagicDNS, a CLI and an optional web UI work.
 
 ## Why
 

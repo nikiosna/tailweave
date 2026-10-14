@@ -65,3 +65,10 @@ logtail:
   enabled: false
 taildrop:
   enabled: false
+oidc:
+  # Dex in the lab (lab/dex/config.yaml). Preauth keys keep working next to it.
+  only_start_if_oidc_is_available: true
+  issuer: http://172.30.0.12:5556/dex
+  client_id: headscale
+  client_secret: lab-oidc-secret
+  scope: ["openid", "profile", "email"]

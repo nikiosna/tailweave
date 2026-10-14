@@ -1,5 +1,5 @@
 # tailweave lab: two headscale control servers with deliberately identical IP ranges,
-# plus tailscale peers in each tailnet. Driven by lab/scripts/*.sh, not meant for
+# plus tailscale peers in each tailnet, and Dex as OIDC provider for SSO logins. Driven by lab/scripts/*.sh, not meant for
 # `docker compose up` on its own (peers need preauth keys from bootstrap.sh).
 #
 # Profiles add conflict scenarios:
@@ -15,6 +15,8 @@ x-headscale: &headscale
   restart: unless-stopped
   volumes:
     - ./headscale/config.yaml:/etc/headscale/config.yaml:ro
+  # headscale refuses to start until Dex answers and is restarted until then.
+  depends_on: [dex]
 
 x-peer: &peer
   build:
@@ -47,6 +49,16 @@ x-peer-b-env: &peer-b-env
   TS_ACCEPT_DNS: "false"
 
 services:
+  dex:
+    image: ghcr.io/dexidp/dex:${DEX_VERSION:-v2.45.0}
+    container_name: dex
+    command: dex serve /etc/dex/config.yaml
+    restart: unless-stopped
+    volumes:
+      - ./dex/config.yaml:/etc/dex/config.yaml:ro
+    networks:
+      lab: { ipv4_address: 172.30.0.12 }
+
   headscale-a:
     <<: *headscale
     container_name: headscale-a

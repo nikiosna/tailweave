@@ -1,0 +1,29 @@
+# Dex as the lab's OIDC provider, so both headscales can log machines in via SSO.
+# Lab only: fixed user and client secret, in-memory storage.
+issuer: http://172.30.0.12:5556/dex
+
+storage:
+  type: memory
+
+web:
+  http: 0.0.0.0:5556
+
+oauth2:
+  skipApprovalScreen: true
+
+enablePasswordDB: true
+staticPasswords:
+  # Password "lab" (bcrypt). Not the user "lab" that owns the preauth keys, so headscale
+  # does not have to reconcile an OIDC user with a local one of the same name.
+  - email: sso@example.com
+    username: sso
+    userID: 6f0c5e0e-6a43-4c5f-9a3c-5e2b9a6c1d01
+    hash: "$2a$10$C9SUlh9CM59QaFV2JqltsOb51qGX3gRNJ3L8gKxw8mrqP2y.uJeLu"
+
+staticClients:
+  - id: headscale
+    name: headscale
+    secret: lab-oidc-secret
+    redirectURIs:
+      - http://172.30.0.10:8080/oidc/callback
+      - http://172.30.0.11:8080/oidc/callback

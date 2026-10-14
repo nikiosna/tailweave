@@ -13,6 +13,14 @@ declare -A HS_URL=([a]=http://172.30.0.10:8080 [b]=http://172.30.0.11:8080)
 TAILNETS=(a b)
 LAB_USER=lab
 
+# The Dex user for SSO logins (lab/dex/config.yaml).
+SSO_USER=sso@example.com
+SSO_PASSWORD=lab
+
+# Headless Chromium for UI checks and SSO logins, installed on first use.
+PLAYWRIGHT_VERSION=1.64.0
+BROWSER_VENV=/opt/tailweave-browser
+
 log() { printf '\033[1;34m==>\033[0m %s\n' "$*" >&2; }
 die() { printf '\033[1;31mxx\033[0m %s\n' "$*" >&2; exit 1; }
 
@@ -40,6 +48,18 @@ forget_dut() {
 		'(. // [])[] | select(.given_name | startswith($p)) | .id'); do
 		hs "$net" nodes delete --identifier "$id" --force >/dev/null
 	done
+}
+
+ensure_playwright() {
+	"$BROWSER_VENV/bin/python" -c "import playwright" 2>/dev/null && return
+	log "installing Playwright $PLAYWRIGHT_VERSION and Chromium into $BROWSER_VENV"
+	command -v apt-get >/dev/null && ! python3 -c 'import ensurepip' 2>/dev/null &&
+		sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq python3-venv >/dev/null
+	sudo python3 -m venv "$BROWSER_VENV"
+	sudo chown -R "$(id -u):$(id -g)" "$BROWSER_VENV"
+	"$BROWSER_VENV/bin/pip" install -q "playwright==$PLAYWRIGHT_VERSION"
+	sudo "$BROWSER_VENV/bin/playwright" install-deps chromium >/dev/null
+	"$BROWSER_VENV/bin/playwright" install chromium
 }
 
 # Retry a command until it succeeds or the timeout (seconds) runs out.

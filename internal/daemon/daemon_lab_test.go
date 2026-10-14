@@ -3,9 +3,11 @@
 package daemon_test
 
 import (
+	"bufio"
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/netip"
 	"os"
 	"os/exec"
@@ -168,6 +170,51 @@ func TestLifecycle(t *testing.T) {
 	assertNoNetns(t)
 	tw.stop(t)
 	assertHostClean(t)
+}
+
+// TestLoginSSO logs in via the web link: `tailweave login` prints headscale's URL, a
+// headless browser signs in at the lab's Dex and confirms, and the login completes.
+func TestLoginSSO(t *testing.T) {
+	labtest.RequireLab(t)
+	tw := startTailweave(t, t.TempDir())
+
+	cmd := exec.Command("sudo", "-n", tw.bin, "login", "a", "-socket", tw.Socket,
+		"-login-server", labtest.LoginServer(labtest.TailnetA), "-hostname", "dut-a", "-timeout", "90s")
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cmd.Stderr = cmd.Stdout
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	var out strings.Builder
+	url := ""
+	sc := bufio.NewScanner(stdout)
+	for url == "" && sc.Scan() {
+		out.WriteString(sc.Text() + "\n")
+		if u, ok := strings.CutPrefix(strings.TrimSpace(sc.Text()), "http"); ok {
+			url = "http" + u
+		}
+	}
+	if url == "" {
+		_ = cmd.Wait()
+		t.Fatalf("no login URL from tailweave login:\n%s", out.String())
+	}
+	if status := must(t)(tw.State(t.Context())).Tailnets[0]; status.State != "NeedsLogin" || status.AuthURL != url {
+		t.Errorf("pending login in state: %+v", status)
+	}
+
+	t.Log(labtest.Run(t, "lab/scripts/sso-login.sh", url))
+	rest, _ := io.ReadAll(stdout)
+	out.Write(rest)
+	if err := cmd.Wait(); err != nil || !strings.Contains(out.String(), "logged in to a as dut-a") {
+		t.Fatalf("tailweave login: %v\n%s", err, out.String())
+	}
+	waitState(t, tw, func(s daemon.State) bool { return device(s, "a", "peer-a1") != nil })
+	if got := curl(t, "peer-a1.a.lab"); got != "peer-a1" {
+		t.Errorf("curl peer-a1 after SSO login = %q", got)
+	}
 }
 
 func assertNoNetns(t *testing.T) {
