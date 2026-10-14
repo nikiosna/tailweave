@@ -6,8 +6,10 @@
 # NO_VM=1 runs the targets directly on a Linux host instead (CI does this).
 
 VM        ?= tailweave
+MAC_VM    ?= tailweave-mac
 SCENARIO  ?= base
 GO_TEST_FLAGS ?=
+MAC_TEST_FLAGS ?= -test.v
 
 NO_VM     ?=
 
@@ -21,7 +23,12 @@ endif
 
 LAB := $(IN_LAB) lab/scripts
 
-.PHONY: help vm-up vm-down vm-destroy sh lab-up lab-status lab-reset playground-up playground-down \
+# The macOS VM is the device under test for the macOS version; the lab stays in $(VM).
+MAC := limactl shell --workdir $(CURDIR) $(MAC_VM)
+DARWIN_GO := GOOS=darwin GOARCH=arm64 CGO_ENABLED=0 go
+
+.PHONY: help vm-up vm-down vm-destroy sh mac-vm-up mac-vm-down mac-vm-destroy mac-sh mac-build \
+	mac-run mac-login mac-test-lab lab-up lab-status lab-reset playground-up playground-down \
 	run lab-login ui ui-check ui-tunnel build test test-lab lint fmt
 
 help: ## Show targets
@@ -29,10 +36,15 @@ help: ## Show targets
 
 # --- VM --------------------------------------------------------------------
 
+# vzNAT connects the VM with the macOS VM; it needs vz, so only on macOS hosts.
+ifeq ($(shell uname -s),Darwin)
+VM_NETWORKS := ,"networks":[{"vzNAT":true}]
+endif
+
 vm-up: ## Create/start the Lima VM
 	@if limactl list -q | grep -qx $(VM); then limactl start $(VM); else \
 		limactl start --tty=false --name $(VM) \
-			--set '.mounts=[{"location":"$(CURDIR)","writable":true}]' lab/lima/tailweave.yaml; fi
+			--set '. += {"mounts":[{"location":"$(CURDIR)","writable":true}]$(VM_NETWORKS)}' lab/lima/tailweave.yaml; fi
 
 vm-down: ## Stop the Lima VM
 	limactl stop $(VM)
@@ -42,6 +54,38 @@ vm-destroy: ## Delete the Lima VM
 
 sh: ## Shell inside the VM, in the repo directory
 	limactl shell --workdir $(CURDIR) $(VM)
+
+# --- macOS VM --------------------------------------------------------------
+
+mac-vm-up: ## Create/start the macOS VM and connect it to the lab in the Linux VM
+	@if limactl list -q | grep -qx $(MAC_VM); then limactl start $(MAC_VM); else \
+		limactl start --tty=false --name $(MAC_VM) \
+			--set '.mounts=[{"location":"$(CURDIR)","writable":true}]' lab/lima/tailweave-mac.yaml; fi
+	lab/scripts/mac-setup.sh $(VM) $(MAC_VM)
+
+mac-vm-down: ## Stop the macOS VM
+	limactl stop $(MAC_VM)
+
+mac-vm-destroy: ## Delete the macOS VM
+	limactl delete --force $(MAC_VM)
+
+mac-sh: ## Shell inside the macOS VM, in the repo directory
+	$(MAC)
+
+mac-build: ## Cross-build tailweave and the lab tests for macOS into ./bin/darwin
+	$(SH) '$(DARWIN_GO) build -o bin/darwin/ ./cmd/... && \
+		$(DARWIN_GO) test -c -tags lab -o bin/darwin/daemon.test ./internal/daemon'
+
+mac-run: mac-build ## Run the tailweave daemon in the macOS VM (then make mac-login)
+	$(MAC) sudo bin/darwin/tailweave run -config lab/tailweave.json
+
+mac-login: mac-build ## Log `make mac-run` into both lab tailnets with their preauth keys
+	lab/scripts/mac-login.sh $(VM) $(MAC_VM)
+
+mac-test-lab: mac-build ## Integration tests in the macOS VM against the lab (make lab-up mac-vm-up first)
+	lab/scripts/mac-setup.sh $(VM) $(MAC_VM)
+	limactl shell --workdir $(CURDIR)/internal/daemon $(MAC_VM) \
+		env TAILWEAVE_BIN=$(CURDIR)/bin/darwin/tailweave $(CURDIR)/bin/darwin/daemon.test -test.count=1 $(MAC_TEST_FLAGS)
 
 # --- Lab -------------------------------------------------------------------
 
@@ -83,8 +127,9 @@ build: ## Build binaries into ./bin
 test: ## Unit tests
 	$(SH) 'go test $(GO_TEST_FLAGS) ./...'
 
-test-lab: ## Integration tests against the running lab (make lab-up first)
-	$(SH) 'go test -tags lab -count=1 -p 1 $(GO_TEST_FLAGS) ./...'
+test-lab: ## Integration tests against the running lab (make lab-up first), both backends
+	$(SH) 'TAILWEAVE_BACKEND=netns go test -tags lab -count=1 -p 1 $(GO_TEST_FLAGS) ./...'
+	$(SH) 'TAILWEAVE_BACKEND=tsnet go test -tags lab -count=1 -p 1 $(GO_TEST_FLAGS) ./internal/daemon'
 
 lint: ## go vet + golangci-lint (if installed)
 	$(SH) 'go vet ./... && (command -v golangci-lint >/dev/null && golangci-lint run || true)'

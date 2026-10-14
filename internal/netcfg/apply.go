@@ -120,7 +120,7 @@ func (h *Host) Apply(p weave.Plan) error {
 		h.routes = routes
 	}
 	if h.DNSAddr.IsValid() && !slices.Equal(p.Domains, h.domains) {
-		if err := h.registerDNS(p.Domains); err != nil {
+		if err := RegisterDNS(DNSLink, h.DNSAddr, p.Domains); err != nil {
 			return err
 		}
 		h.domains = slices.Clone(p.Domains)
@@ -128,24 +128,24 @@ func (h *Host) Apply(p weave.Plan) error {
 	return nil
 }
 
-// registerDNS makes systemd-resolved send queries for the tailnet domains to tailweave.
-// Each domain is both a routing domain (~a.lab) and a search domain, so short host
-// names work too.
-func (h *Host) registerDNS(domains []string) error {
+// RegisterDNS makes systemd-resolved send queries for the tailnet domains to addr, via
+// link. Each domain is both a routing domain (~a.lab) and a search domain, so short host
+// names work too. No domains revert the link's DNS settings.
+func RegisterDNS(link string, addr netip.Addr, domains []string) error {
 	if len(domains) == 0 {
-		return run("", "resolvectl", "revert", DNSLink)
+		return run("", "resolvectl", "revert", link)
 	}
-	if err := run("", "resolvectl", "dns", DNSLink, h.DNSAddr.String()); err != nil {
+	if err := run("", "resolvectl", "dns", link, addr.String()); err != nil {
 		return err
 	}
-	args := []string{"domain", DNSLink}
+	args := []string{"domain", link}
 	for _, d := range domains {
 		args = append(args, "~"+d, d)
 	}
 	if err := run("", "resolvectl", args...); err != nil {
 		return err
 	}
-	return run("", "resolvectl", "default-route", DNSLink, "false")
+	return run("", "resolvectl", "default-route", link, "false")
 }
 
 // Teardown removes everything tailweave configured. Errors are ignored: parts may not

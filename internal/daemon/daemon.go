@@ -1,6 +1,7 @@
-// Package daemon runs tailweave: it runs one tailscaled per tailnet in its own network
-// namespace, computes the merged address plan, applies it to the host, serves DNS and
-// offers a JSON API on a Unix socket.
+// Package daemon runs tailweave: it runs one Tailscale instance per tailnet, isolated
+// from the others (backend netns: a tailscaled per network namespace; backend tsnet:
+// in-process engines behind a userspace router), computes the merged address plan,
+// applies it to the host, serves DNS and offers a JSON API on a Unix socket.
 package daemon
 
 import (
@@ -9,7 +10,6 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
-	"net/netip"
 	"os"
 	"path/filepath"
 	"slices"
@@ -17,8 +17,6 @@ import (
 	"time"
 
 	"github.com/Nikiosna/tailweave/internal/dns"
-	"github.com/Nikiosna/tailweave/internal/instance"
-	"github.com/Nikiosna/tailweave/internal/netcfg"
 	"github.com/Nikiosna/tailweave/internal/tailnet"
 	"github.com/Nikiosna/tailweave/internal/weave"
 )
@@ -30,14 +28,12 @@ const PollInterval = 2 * time.Second
 type Daemon struct {
 	cfg Config
 	dns dns.Server
-	mgr *instance.Manager
 
 	// opMu serializes reconciling and starting/stopping instances. It guards the fields
 	// below and is taken before mu.
-	opMu    sync.Mutex
-	host    *netcfg.Host
-	insts   map[string]*instance.Instance
-	clients map[string]*tailnet.Client
+	opMu  sync.Mutex
+	be    backend
+	insts map[string]runner
 
 	mu       sync.Mutex // guards the fields below
 	st       state
@@ -60,20 +56,14 @@ func New(cfg Config) (*Daemon, error) {
 	if err != nil {
 		return nil, err
 	}
+	be, err := newBackend(cfg)
+	if err != nil {
+		return nil, err
+	}
 	return &Daemon{
-		cfg: cfg,
-		mgr: &instance.Manager{
-			Transit:  cfg.Transit,
-			StateDir: filepath.Join(cfg.StateDir, "tailnets"),
-			RunDir:   filepath.Join(filepath.Dir(cfg.Socket), "tailnets"),
-		},
-		host: &netcfg.Host{
-			DNSAddr: cfg.DNS,
-			Blocked: []netip.Prefix{netcfg.CGNAT, cfg.Pool},
-			Transit: cfg.Transit,
-		},
-		insts:    map[string]*instance.Instance{},
-		clients:  map[string]*tailnet.Client{},
+		cfg:      cfg,
+		be:       be,
+		insts:    map[string]runner{},
 		st:       st,
 		tailnets: map[string]weave.Tailnet{},
 		status:   map[string]tailnetStatus{},
@@ -84,11 +74,11 @@ func New(cfg Config) (*Daemon, error) {
 // host in line with them until ctx is done. Everything is removed again on return,
 // except the tailscaled state, so the tailnets stay logged in.
 func (d *Daemon) Run(ctx context.Context) error {
-	if err := d.host.Setup(); err != nil {
-		d.host.Teardown()
+	if err := d.be.Setup(); err != nil {
+		d.be.Teardown()
 		return err
 	}
-	defer d.host.Teardown()
+	defer d.be.Teardown()
 
 	if err := d.dns.Start(net.JoinHostPort(d.cfg.DNS.String(), "53")); err != nil {
 		return err
@@ -115,7 +105,7 @@ func (d *Daemon) Run(ctx context.Context) error {
 	}
 	d.opMu.Unlock()
 	defer d.stopAll()
-	slog.Info("tailweave running", "socket", d.cfg.Socket, "dns", d.cfg.DNS, "tailnets", len(d.insts))
+	slog.Info("tailweave running", "backend", d.cfg.Backend, "socket", d.cfg.Socket, "dns", d.cfg.DNS, "tailnets", len(d.insts))
 
 	t := time.NewTicker(PollInterval)
 	defer t.Stop()
@@ -160,26 +150,22 @@ func (d *Daemon) entries() []tailnetEntry {
 // startInstance starts a tailnet's instance; a failure shows up in its status. Callers
 // hold opMu.
 func (d *Daemon) startInstance(e tailnetEntry) error {
-	inst, err := d.mgr.Start(e.Name, e.Index)
+	inst, err := d.be.Start(e)
 	if err != nil {
 		slog.Error("start instance", "tailnet", e.Name, "err", err)
 		d.setStatus(e.Name, tailnetStatus{backend: "Down", err: err.Error()})
 		return err
 	}
 	d.insts[e.Name] = inst
-	d.clients[e.Name] = tailnet.New(inst.Socket)
-	d.host.AddNamespace(inst.Namespace())
 	return nil
 }
 
 // stopInstance stops a tailnet's instance and forgets its peers. Callers hold opMu.
 func (d *Daemon) stopInstance(name string) {
 	if inst := d.insts[name]; inst != nil {
-		d.host.RemoveNamespace(name)
 		inst.Stop()
 	}
 	delete(d.insts, name)
-	delete(d.clients, name)
 	d.mu.Lock()
 	delete(d.tailnets, name)
 	delete(d.status, name)
@@ -210,8 +196,8 @@ func (d *Daemon) reconcile(ctx context.Context) error {
 		err error
 	}
 	results := map[string]result{}
-	for name, c := range d.clients {
-		st, err := c.Status(ctx, name)
+	for name, inst := range d.insts {
+		st, err := inst.Status(ctx)
 		results[name] = result{st, err}
 	}
 
@@ -253,7 +239,7 @@ func (d *Daemon) reconcile(ctx context.Context) error {
 	d.mu.Unlock()
 
 	d.dns.Update(plan.Names, plan.Domains)
-	return d.host.Apply(plan)
+	return d.be.Apply(plan)
 }
 
 // compute recomputes the plan from the current state. Callers hold d.mu.

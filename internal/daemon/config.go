@@ -7,12 +7,10 @@ import (
 	"net/netip"
 	"os"
 	"path/filepath"
+	"runtime"
 
 	"github.com/Nikiosna/tailweave/internal/weave"
 )
-
-// DefaultSocket is where the daemon serves its API unless configured otherwise.
-const DefaultSocket = "/run/tailweave/tailweave.sock"
 
 // DefaultLoginServer is the control server used when a login names none.
 const DefaultLoginServer = "https://controlplane.tailscale.com"
@@ -25,7 +23,8 @@ type Config struct {
 	DNS      netip.Addr   `json:"dns"`      // address of the DNS service (default 100.100.100.100)
 	Socket   string       `json:"socket"`   // Unix socket of the API (default DefaultSocket)
 	StateDir string       `json:"stateDir"` // state file and tailscaled state (default /var/lib/tailweave)
-	Transit  netip.Prefix `json:"transit"`  // veth addresses of the namespaces, a /30 each (default 10.201.0.0/16)
+	Transit  netip.Prefix `json:"transit"`  // netns: veth addresses, a /30 each; tsnet: the TUN's address is the first host (default 10.201.0.0/16)
+	Backend  string       `json:"backend"`  // "netns" or "tsnet" (default: netns on Linux, tsnet elsewhere)
 
 	// Tailnets is no longer supported; it only exists to reject old config files clearly.
 	Tailnets json.RawMessage `json:"tailnets,omitempty"`
@@ -62,7 +61,16 @@ func LoadConfig(path string) (Config, error) {
 		c.Socket = DefaultSocket
 	}
 	if c.StateDir == "" {
-		c.StateDir = "/var/lib/tailweave"
+		c.StateDir = defaultStateDir
+	}
+	if c.Backend == "" {
+		c.Backend = defaultBackend()
+	}
+	if c.Backend != BackendNetns && c.Backend != BackendTsnet {
+		return c, fmt.Errorf("unknown backend %q, use %q or %q", c.Backend, BackendNetns, BackendTsnet)
+	}
+	if c.Backend == BackendNetns && runtime.GOOS != "linux" {
+		return c, fmt.Errorf("backend %q needs Linux", BackendNetns)
 	}
 	if !c.Transit.IsValid() {
 		c.Transit = netip.MustParsePrefix("10.201.0.0/16")

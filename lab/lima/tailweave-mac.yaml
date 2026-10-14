@@ -1,0 +1,28 @@
+# Lima VM with macOS, the device under test for tailweave's macOS version. The lab itself
+# (headscales, Dex, peers) keeps running in the Linux VM (tailweave.yaml); this VM reaches
+# it through the Linux VM over vzNAT (see lab/scripts/mac-setup.sh).
+#
+# Started via `make mac-vm-up`, which mounts the repository writable at the same path.
+# Needs an Apple Silicon Mac whose macOS is at least as new as the guest. Experimental in
+# Lima, and the first start downloads a restore image of about 17 GB.
+
+minimumLimaVersion: 2.1.0
+
+base:
+- template:_images/macos-27
+
+cpus: 4
+memory: 8GiB
+disk: 80GiB
+
+# The macOS installer needs a display device.
+video:
+  display: "default"
+
+# The Makefile sets .mounts[0].location to the repository root.
+mounts: []
+
+# Shared NAT with the Linux VM, which has the same network, so this VM can route to the
+# lab network through it.
+networks:
+- vzNAT: true

@@ -37,6 +37,10 @@ for net in "${TAILNETS[@]}"; do
 	key=$(hs "$net" preauthkeys create --user "$uid" --reusable --expiration 720h -o json | jq -r .key)
 	[ -n "$key" ] && [ "$key" != null ] || die "could not create preauth key for $net"
 	echo "KEY_${net^^}=$key" >> "$STATE_DIR/keys.env"
+	# For the REST API, which lab tests use, also from machines without Docker.
+	apikey=$(hs "$net" apikeys create --expiration 720h)
+	[ -n "$apikey" ] || die "could not create API key for $net"
+	echo "APIKEY_${net^^}=$apikey" >> "$STATE_DIR/keys.env"
 done
 chmod 600 "$STATE_DIR/keys.env"
 load_scenario

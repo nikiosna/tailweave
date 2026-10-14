@@ -1,18 +1,18 @@
 // Package labtest drives the lab in lab/ from Go integration tests.
 //
-// Tests using it carry the build tag "lab" and expect a running lab
-// (make lab-up) on a Linux host with Docker and sudo.
+// Tests using it carry the build tag "lab" and expect a running lab (make lab-up) and
+// sudo. They talk to the headscales over their REST API with the keys bootstrap.sh left
+// in lab/.state/keys.env, so they also run on a machine without Docker, such as the
+// macOS VM, as long as it reaches the lab network.
 package labtest
 
 import (
 	"bytes"
-	"encoding/json"
 	"net/netip"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
-	"strconv"
 	"strings"
 	"testing"
 )
@@ -23,11 +23,11 @@ const (
 	TailnetB = "b"
 )
 
-// Node is a node as reported by headscale.
+// Node is a node as reported by headscale's REST API.
 type Node struct {
-	ID   uint64   `json:"id"`
-	Name string   `json:"given_name"`
-	IPs  []string `json:"ip_addresses"`
+	ID   string   `json:"id"`
+	Name string   `json:"givenName"`
+	IPs  []string `json:"ipAddresses"`
 }
 
 // IPv4 returns the node's tailnet IPv4 address.
@@ -69,39 +69,6 @@ func Output(name string, args ...string) (string, error) {
 	return strings.TrimSpace(stdout.String()), nil
 }
 
-// Nodes lists all nodes of a lab tailnet.
-func Nodes(t testing.TB, tailnet string) []Node {
-	t.Helper()
-	out := Run(t, "docker", "exec", "headscale-"+tailnet, "headscale", "nodes", "list", "-o", "json")
-	var nodes []Node
-	if err := json.Unmarshal([]byte(out), &nodes); err != nil {
-		t.Fatalf("parse nodes of %s: %v", tailnet, err)
-	}
-	return nodes
-}
-
-// NodeIP returns the IPv4 address of the named node in a tailnet.
-func NodeIP(t testing.TB, tailnet, name string) netip.Addr {
-	t.Helper()
-	for _, n := range Nodes(t, tailnet) {
-		if n.Name == name {
-			return n.IPv4()
-		}
-	}
-	t.Fatalf("node %s not found in tailnet %s", name, tailnet)
-	return netip.Addr{}
-}
-
-// RequireLab skips the test if the lab is not running.
-func RequireLab(t testing.TB) {
-	t.Helper()
-	for _, tn := range []string{TailnetA, TailnetB} {
-		if _, err := Output("docker", "exec", "headscale-"+tn, "headscale", "users", "list"); err != nil {
-			t.Skipf("lab not running (headscale-%s unavailable), run `make lab-up`", tn)
-		}
-	}
-}
-
 // Scenario returns the scenario the lab was started with (make lab-up SCENARIO=...).
 func Scenario() string {
 	b, err := os.ReadFile(filepath.Join(Root(), "lab", ".state", "scenario.env"))
@@ -119,31 +86,4 @@ func Scenario() string {
 // LoginServer returns the control URL of a lab tailnet.
 func LoginServer(tailnet string) string {
 	return map[string]string{TailnetA: "http://172.30.0.10:8080", TailnetB: "http://172.30.0.11:8080"}[tailnet]
-}
-
-// AuthKeyFile writes the lab's reusable preauth key for a tailnet into a file in dir and
-// returns its path.
-func AuthKeyFile(t testing.TB, dir, tailnet string) string {
-	t.Helper()
-	f := strings.Fields(Run(t, "lab/scripts/keys.sh", tailnet))
-	if len(f) != 2 {
-		t.Fatalf("keys.sh %s printed %d fields", tailnet, len(f))
-	}
-	path := filepath.Join(dir, "authkey-"+tailnet)
-	if err := os.WriteFile(path, []byte(f[1]), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	return path
-}
-
-// ForgetNodes deletes the nodes whose name starts with prefix from a tailnet, so earlier
-// test runs do not linger as offline peers.
-func ForgetNodes(t testing.TB, tailnet, prefix string) {
-	t.Helper()
-	for _, n := range Nodes(t, tailnet) {
-		if strings.HasPrefix(n.Name, prefix) {
-			Run(t, "docker", "exec", "headscale-"+tailnet, "headscale", "nodes", "delete",
-				"--identifier", strconv.FormatUint(n.ID, 10), "--force")
-		}
-	}
 }

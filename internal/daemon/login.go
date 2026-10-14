@@ -8,6 +8,7 @@ import (
 	"slices"
 
 	"github.com/Nikiosna/tailweave/internal/instance"
+	"github.com/Nikiosna/tailweave/internal/tailnet"
 	"github.com/Nikiosna/tailweave/internal/weave"
 )
 
@@ -29,8 +30,8 @@ func (d *Daemon) login(req LoginRequest) error {
 	d.opMu.Lock()
 	defer d.opMu.Unlock()
 
-	if c := d.clients[req.Name]; c != nil {
-		if st, err := c.Status(context.Background(), req.Name); err == nil && st.Running() {
+	if inst := d.insts[req.Name]; inst != nil {
+		if st, err := inst.Status(context.Background()); err == nil && st.Running() {
 			return fmt.Errorf("%w: %s is already logged in; use `tailweave remove %s` first to log in differently",
 				errConflict, req.Name, req.Name)
 		}
@@ -62,7 +63,7 @@ func (d *Daemon) login(req LoginRequest) error {
 		inst = d.insts[req.Name]
 	}
 	slog.Info("logging in", "tailnet", req.Name, "server", entry.LoginServer, "authkey", req.AuthKey != "")
-	return inst.Up(instance.Login{LoginServer: entry.LoginServer, Hostname: entry.Hostname, AuthKey: req.AuthKey})
+	return inst.Up(tailnet.Login{LoginServer: entry.LoginServer, Hostname: entry.Hostname, AuthKey: req.AuthKey})
 }
 
 // freeIndex returns the lowest instance index no tailnet uses. Callers hold d.mu.
@@ -115,7 +116,7 @@ func (d *Daemon) remove(name string) error {
 	}
 	d.stopInstance(name)
 	d.forget(name)
-	return d.mgr.Purge(name)
+	return d.be.Purge(name)
 }
 
 // forget drops a tailnet and its mappings from the state.

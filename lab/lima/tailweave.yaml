@@ -12,7 +12,9 @@ cpus: 4
 memory: 8GiB
 disk: 30GiB
 
-# The Makefile sets .mounts[0].location to the repository root.
+# The Makefile sets .mounts[0].location to the repository root. On macOS hosts it also
+# adds a vzNAT network, shared with the macOS VM (tailweave-mac.yaml), which routes to the
+# lab network through this VM.
 mounts: []
 
 # Do not forward guest ports to the host: the lab's tailscaled instances would otherwise

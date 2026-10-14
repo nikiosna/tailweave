@@ -81,7 +81,7 @@ func TestWeave(t *testing.T) {
 			t.Errorf("peer-b1 still routed to %s without auto-mapping", b1.RoutedIP)
 		}
 		flushDNS(t)
-		if out, err := labtest.Output("getent", "hosts", "peer-b1."+domB); err == nil {
+		if out, ok := resolve(t, "peer-b1."+domB); ok {
 			t.Errorf("peer-b1 resolves without route: %s", out)
 		}
 		unresolved := false
@@ -134,73 +134,6 @@ func TestWeave(t *testing.T) {
 	})
 }
 
-// TestIsolation checks that only the host itself reaches the tailnets: neither a device
-// on the host's LAN that routes the tailnet ranges via the host, nor one tailnet's
-// namespace, gets into a tailnet through tailweave.
-func TestIsolation(t *testing.T) {
-	labtest.RequireLab(t)
-	tw := startTailweave(t, t.TempDir())
-	tw.login(t, labtest.TailnetA)
-	tw.login(t, labtest.TailnetB)
-	st := waitState(t, tw, func(s daemon.State) bool { return device(s, "b", "peer-b3") != nil })
-	a1 := labtest.NodeIP(t, labtest.TailnetA, "peer-a1")
-	b1 := device(st, "b", "peer-b1").RoutedIP
-	b3 := device(st, "b", "peer-b3").RealIP
-	if got := curl(t, b3.String()); got != "peer-b3" {
-		t.Fatalf("host does not reach peer-b3: %q", got)
-	}
-
-	t.Run("lan", func(t *testing.T) {
-		lan := lanClient(t)
-		for _, ip := range []netip.Addr{a1, b1, b3} {
-			if out, err := labtest.Output("sudo", "-n", "ip", "netns", "exec", lan, "curl", "-s", "-m3", "http://"+ip.String()+"/"); err == nil {
-				t.Errorf("LAN client reaches %s: %q", ip, out)
-			}
-		}
-	})
-
-	t.Run("namespaces", func(t *testing.T) {
-		for _, ip := range []netip.Addr{b1, b3} {
-			if out, err := labtest.Output("sudo", "-n", "ip", "netns", "exec", "tailweave-a", "curl", "-s", "-m3", "http://"+ip.String()+"/"); err == nil {
-				t.Errorf("namespace of tailnet a reaches %s: %q", ip, out)
-			}
-		}
-	})
-}
-
-// lanClient creates a namespace that plays a device on the host's LAN with a route to
-// everything via the host, and returns its name. FORWARD is opened for it so Docker's
-// DROP policy in the VM does not hide what a host without Docker would forward.
-func lanClient(t *testing.T) string {
-	t.Helper()
-	const ns = "twtest-lan"
-	sudo := func(args ...string) { t.Helper(); labtest.Run(t, "sudo", append([]string{"-n"}, args...)...) }
-	cleanup := func() {
-		_, _ = labtest.Output("sudo", "-n", "ip", "netns", "del", ns)
-		for _, dir := range []string{"-i", "-o"} {
-			for {
-				if _, err := labtest.Output("sudo", "-n", "iptables", "-D", "DOCKER-USER", dir, "lanh0", "-j", "ACCEPT"); err != nil {
-					break
-				}
-			}
-		}
-	}
-	cleanup()
-	t.Cleanup(cleanup)
-	sudo("ip", "netns", "add", ns)
-	sudo("ip", "link", "add", "lanh0", "type", "veth", "peer", "name", "lann0", "netns", ns)
-	sudo("ip", "addr", "add", "10.202.0.1/30", "dev", "lanh0")
-	sudo("ip", "link", "set", "lanh0", "up")
-	sudo("ip", "-n", ns, "addr", "add", "10.202.0.2/30", "dev", "lann0")
-	sudo("ip", "-n", ns, "link", "set", "lann0", "up")
-	sudo("ip", "-n", ns, "route", "add", "default", "via", "10.202.0.1")
-	if _, err := labtest.Output("sudo", "-n", "iptables", "-n", "-L", "DOCKER-USER"); err == nil {
-		sudo("iptables", "-I", "DOCKER-USER", "-i", "lanh0", "-j", "ACCEPT")
-		sudo("iptables", "-I", "DOCKER-USER", "-o", "lanh0", "-j", "ACCEPT")
-	}
-	return ns
-}
-
 // TestLifecycle checks that tailnets stay logged in across daemon restarts, and that
 // logout and remove clean up after themselves, as does stopping the daemon.
 func TestLifecycle(t *testing.T) {
@@ -224,7 +157,7 @@ func TestLifecycle(t *testing.T) {
 	if len(s.Tailnets) != 1 || s.Tailnets[0].State != "LoggedOut" || len(s.Devices) != 0 {
 		t.Errorf("state after logout: %+v", s)
 	}
-	assertNoNetns(t)
+	assertNoInstances(t)
 
 	tw.login(t, labtest.TailnetA)
 	tw.cli(t, "remove", "a")
@@ -234,7 +167,7 @@ func TestLifecycle(t *testing.T) {
 	if _, err := labtest.Output("sudo", "-n", "test", "-e", filepath.Join(dir, "state", "tailnets", "a")); err == nil {
 		t.Error("state of tailnet a still exists after remove")
 	}
-	assertNoNetns(t)
+	assertNoInstances(t)
 	tw.stop(t)
 	assertHostClean(t)
 }
@@ -272,7 +205,7 @@ func TestLoginSSO(t *testing.T) {
 		t.Errorf("pending login in state: %+v", status)
 	}
 
-	t.Log(labtest.Run(t, "lab/scripts/sso-login.sh", url))
+	labtest.SSOLogin(t, url)
 	rest, _ := io.ReadAll(stdout)
 	out.Write(rest)
 	if err := cmd.Wait(); err != nil || !strings.Contains(out.String(), "logged in to a as dut-a") {
@@ -281,31 +214,6 @@ func TestLoginSSO(t *testing.T) {
 	waitState(t, tw, func(s daemon.State) bool { return device(s, "a", "peer-a1") != nil })
 	if got := curl(t, "peer-a1.a.lab"); got != "peer-a1" {
 		t.Errorf("curl peer-a1 after SSO login = %q", got)
-	}
-}
-
-func assertNoNetns(t *testing.T) {
-	t.Helper()
-	if out := labtest.Run(t, "ip", "netns", "list"); strings.Contains(out, "tailweave-") {
-		t.Errorf("namespaces left:\n%s", out)
-	}
-}
-
-// assertHostClean checks that a stopped tailweave left nothing behind.
-func assertHostClean(t *testing.T) {
-	t.Helper()
-	assertNoNetns(t)
-	if out := labtest.Run(t, "ip", "-br", "link"); strings.Contains(out, "twh") || strings.Contains(out, "tailweave0") {
-		t.Errorf("interfaces left:\n%s", out)
-	}
-	if out := labtest.Run(t, "sudo", "-n", "nft", "list", "tables"); strings.Contains(out, "ip tailweave") {
-		t.Errorf("nft tables left:\n%s", out)
-	}
-	if out, _ := labtest.Output("sudo", "-n", "iptables", "-S", "DOCKER-USER"); strings.Contains(out, "twh") {
-		t.Errorf("DOCKER-USER rules left:\n%s", out)
-	}
-	if out := labtest.Run(t, "ip", "rule"); strings.Contains(out, "5250") {
-		t.Errorf("ip rule left:\n%s", out)
 	}
 }
 
@@ -349,14 +257,24 @@ func must(t *testing.T) func(daemon.State, error) daemon.State {
 
 // startTailweave starts the daemon with its state in dir. It is stopped at the end of
 // the test unless stopped before; then the test's nodes are removed from headscale.
+//
+// $TAILWEAVE_BACKEND picks the backend (default: the platform's), $TAILWEAVE_BIN a
+// prebuilt binary (default: built from the repository, which needs Go).
 func startTailweave(t *testing.T, dir string) tailweave {
 	t.Helper()
-	bin := filepath.Join(dir, "tailweave")
-	labtest.Run(t, "go", "build", "-o", bin, "./cmd/tailweave")
+	bin := os.Getenv("TAILWEAVE_BIN")
+	if bin == "" {
+		bin = filepath.Join(dir, "tailweave")
+		labtest.Run(t, "go", "build", "-o", bin, "./cmd/tailweave")
+	}
 	sock := filepath.Join(dir, "tailweave.sock")
-	cfg, _ := json.Marshal(map[string]any{"stateDir": filepath.Join(dir, "state"), "socket": sock})
-	conf := filepath.Join(dir, "config.json")
-	if err := os.WriteFile(conf, cfg, 0o644); err != nil {
+	conf := map[string]any{"stateDir": filepath.Join(dir, "state"), "socket": sock}
+	if b := os.Getenv("TAILWEAVE_BACKEND"); b != "" {
+		conf["backend"] = b
+	}
+	cfg, _ := json.Marshal(conf)
+	confPath := filepath.Join(dir, "config.json")
+	if err := os.WriteFile(confPath, cfg, 0o644); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() {
@@ -368,7 +286,7 @@ func startTailweave(t *testing.T, dir string) tailweave {
 	})
 
 	var log bytes.Buffer
-	cmd := exec.Command("sudo", "-n", bin, "run", "-config", conf)
+	cmd := exec.Command("sudo", "-n", bin, "run", "-config", confPath)
 	cmd.Stdout, cmd.Stderr = &log, &log
 	if err := cmd.Start(); err != nil {
 		t.Fatal(err)
@@ -437,9 +355,4 @@ func udp(t *testing.T, host string) string {
 	t.Helper()
 	out, _ := labtest.Output("sh", "-c", "echo x | nc -u -w2 "+host+" 8")
 	return strings.TrimSpace(out)
-}
-
-func flushDNS(t *testing.T) {
-	t.Helper()
-	labtest.Run(t, "sudo", "-n", "resolvectl", "flush-caches")
 }

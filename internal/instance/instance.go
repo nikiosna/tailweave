@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/Nikiosna/tailweave/internal/netcfg"
+	"github.com/Nikiosna/tailweave/internal/tailnet"
 )
 
 // Tun is the name of tailscaled's TUN interface inside every namespace.
@@ -222,11 +223,7 @@ func (i *Instance) runTailscaled(ctx context.Context) error {
 }
 
 // Login is what `tailscale up` gets.
-type Login struct {
-	LoginServer string
-	Hostname    string
-	AuthKey     string // empty: interactive login, the URL shows up in the status
-}
+type Login = tailnet.Login
 
 // Up starts logging in and returns at once. Without an auth key, tailscaled publishes a
 // login URL in its status; the login completes when the user has followed it. A failed
