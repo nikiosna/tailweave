@@ -79,7 +79,7 @@ offering TCP, UDP and iperf3 test services, and scenarios for the conflicts abov
  headscale-a (172.30.0.10)       headscale-b (172.30.0.11)
  peer-a1 100.64.0.1              peer-b1 100.64.0.1
  peer-a2 100.64.0.2              peer-b2 100.64.0.2
- router-a  10.99.0.0/24          router-b  10.99.0.0/24, 192.168.5.0/24
+ router-a  10.99.0.0/24          router-b  10.99.0.0/24, 192.168.104.0/24
  exit-a    exit node             exit-b    exit node
 ```
 

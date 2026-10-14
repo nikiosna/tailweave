@@ -4,7 +4,7 @@
 #
 # Profiles add conflict scenarios:
 #   subnets     overlapping subnet routes (A and B both route 10.99.0.0/24),
-#               and a route equal to the Lima VM LAN (192.168.5.0/24)
+#               and a route equal to the Lima VM LAN, user-v2 (192.168.104.0/24)
 #   exit-nodes  one exit node in each tailnet
 
 name: tailweave-lab
@@ -153,7 +153,7 @@ services:
     environment:
       <<: *peer-b-env
       TS_HOSTNAME: router-b
-      TS_ROUTES: 10.99.0.0/24,192.168.5.0/24
+      TS_ROUTES: 10.99.0.0/24,192.168.104.0/24
       LAB_EXTRA_ADDRS: 10.99.0.1/32
     volumes: [router-b:/var/lib/tailscale]
     networks: [lab]

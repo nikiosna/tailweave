@@ -47,7 +47,9 @@ no personal paths. Commit locally only; pushing is done by the maintainer.
    - [x] macOS host setup: utun address, routes for 100.64.0.0/10 and the pool, DNS
      service on a lo0 alias, resolver registration via `scutil`; cross-built from the
      Linux VM
-   - [ ] macOS VM in the lab (`make mac-vm-up`, `make mac-test-lab`) green
+   - [x] macOS VM in the lab (`make mac-vm-up`, `make mac-test-lab`): `TestWeave`,
+     `TestLifecycle`, `TestLoginSSO` pass on macOS 27; peers do not reach the host
+   - [ ] `TestIsolation` on macOS (needs a way to run commands on peers without Docker)
    - [ ] Network Extension instead of a root daemon with utun (same router, packets
      from `NEPacketTunnelFlow`)
 4. **Linux on the tsnet core**: make `tsnet` the default on Linux too, then drop the netns
@@ -69,8 +71,8 @@ Keep this list current when finishing or starting a step.
   `internal/daemon/backend.go`.
 - macOS work happens in a second Lima VM `tailweave-mac` with macOS (`make mac-vm-up`,
   Apple Silicon only; the first start downloads a ~17 GB restore image). The lab stays
-  in the Linux VM; `lab/scripts/mac-setup.sh` routes the macOS VM to it over a shared
-  vzNAT network. There is no Go in the macOS VM: `make mac-build` cross-compiles
+  in the Linux VM; `lab/scripts/mac-setup.sh` routes the macOS VM to it over Lima's
+  user-v2 network. After the installation the VM runs headless. There is no Go in the macOS VM: `make mac-build` cross-compiles
   `bin/darwin/tailweave` and the lab test binary in the Linux VM.
 - Ad-hoc commands in the VM: `limactl shell --workdir $PWD tailweave -- <cmd>`
   (use `bash -lc '...'` when Go is needed; PATH comes from /etc/profile.d/go.sh).
@@ -95,7 +97,7 @@ Keep this list current when finishing or starting a step.
   100.64.0.1, peer-a2/peer-b2 100.64.0.2, routers .3, exit nodes .4. peer-b3 exists only
   in tailnet B and starts last, so its IP does not collide with a peer in A.
 - Scenarios: `subnets` (router-a and router-b both route 10.99.0.0/24 and answer on
-  10.99.0.1; router-b also routes the Lima LAN 192.168.5.0/24), `exit-nodes` (exit-a,
+  10.99.0.1; router-b also routes the Lima LAN 192.168.104.0/24, user-v2), `exit-nodes` (exit-a,
   exit-b), `dns-suffix` (both tailnets use base domain a.lab).
 - Peer test services: HTTP :80 and UDP :8 return the peer name, UDP :7 echo,
   iperf3 server. Use them to tell which tailnet answered.
@@ -161,11 +163,15 @@ Keep this list current when finishing or starting a step.
   on exit. It turns off tsnet's log upload to Tailscale (`envknob.SetNoLogsNoSupport`).
 - Lima's macOS guests have no passwordless sudo; `mac-setup.sh` adds
   `/etc/sudoers.d/tailweave-lab` once, with the password from `~/password` in the guest.
-- On macOS hosts `make vm-up` gives the Linux VM a vzNAT network (`lima0`) next to the
-  default one; an older VM gets it with `limactl stop tailweave && limactl edit
-  tailweave --set '.networks=[{"vzNAT":true}]'`. `mac-setup.sh` lets that interface
-  forward to the lab bridge `twlab0` (DOCKER-USER) and adds the route in the macOS VM;
-  both are gone after a reboot, so the mac targets run it again.
+- Both VMs use Lima's `user-v2` network (192.168.104.0/24, the Linux VM's only
+  interface); vzNAT does not work, it isolates VMs from each other. An older Linux VM
+  gets it with `limactl stop tailweave && limactl edit tailweave --set
+  '.networks=[{"lima":"user-v2"}]'`. `mac-setup.sh` lets that interface forward to the
+  lab bridge `twlab0` (DOCKER-USER) and adds the route in the macOS VM; both are gone
+  after a reboot, so the mac targets run it again.
+- Lima mounts the repository at `/Volumes/My Shared Files/lima-<hash>` in macOS guests;
+  `mac-setup.sh` symlinks it to its host path. The macOS installer needs a display, so
+  `make mac-vm-up` creates the VM with one and then switches to `video.display: none`.
 - Pinned versions: headscale 0.29.4, tailscale 1.102.5 (also the `tailscale.com` Go
   module), Dex v2.45.0, Go 1.27.2, Playwright 1.64.0 (in `lab/compose.yaml`,
   `lab/lima/tailweave.yaml`, `lab/scripts/common.sh`, `go.mod`, CI), macOS 27 for the

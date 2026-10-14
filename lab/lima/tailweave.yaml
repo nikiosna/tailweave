@@ -12,10 +12,13 @@ cpus: 4
 memory: 8GiB
 disk: 30GiB
 
-# The Makefile sets .mounts[0].location to the repository root. On macOS hosts it also
-# adds a vzNAT network, shared with the macOS VM (tailweave-mac.yaml), which routes to the
-# lab network through this VM.
+# The Makefile sets .mounts[0].location to the repository root.
 mounts: []
+
+# Lima's user-v2 network lets VMs reach each other: the macOS VM (tailweave-mac.yaml)
+# routes to the lab network through this VM.
+networks:
+- lima: user-v2
 
 # Do not forward guest ports to the host: the lab's tailscaled instances would otherwise
 # collide with a Tailscale client running on the host (UDP 41641).

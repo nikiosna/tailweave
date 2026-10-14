@@ -36,15 +36,10 @@ help: ## Show targets
 
 # --- VM --------------------------------------------------------------------
 
-# vzNAT connects the VM with the macOS VM; it needs vz, so only on macOS hosts.
-ifeq ($(shell uname -s),Darwin)
-VM_NETWORKS := ,"networks":[{"vzNAT":true}]
-endif
-
 vm-up: ## Create/start the Lima VM
 	@if limactl list -q | grep -qx $(VM); then limactl start $(VM); else \
 		limactl start --tty=false --name $(VM) \
-			--set '. += {"mounts":[{"location":"$(CURDIR)","writable":true}]$(VM_NETWORKS)}' lab/lima/tailweave.yaml; fi
+			--set '.mounts=[{"location":"$(CURDIR)","writable":true}]' lab/lima/tailweave.yaml; fi
 
 vm-down: ## Stop the Lima VM
 	limactl stop $(VM)
@@ -57,10 +52,14 @@ sh: ## Shell inside the VM, in the repo directory
 
 # --- macOS VM --------------------------------------------------------------
 
+# The macOS installer needs a display; once installed, the VM runs headless.
 mac-vm-up: ## Create/start the macOS VM and connect it to the lab in the Linux VM
 	@if limactl list -q | grep -qx $(MAC_VM); then limactl start $(MAC_VM); else \
 		limactl start --tty=false --name $(MAC_VM) \
-			--set '.mounts=[{"location":"$(CURDIR)","writable":true}]' lab/lima/tailweave-mac.yaml; fi
+			--set '.mounts=[{"location":"$(CURDIR)","writable":true}]' lab/lima/tailweave-mac.yaml && \
+		limactl stop $(MAC_VM) && \
+		limactl edit --tty=false $(MAC_VM) --set '.video.display="none"' && \
+		limactl start $(MAC_VM); fi
 	lab/scripts/mac-setup.sh $(VM) $(MAC_VM)
 
 mac-vm-down: ## Stop the macOS VM
