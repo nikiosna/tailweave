@@ -11,6 +11,9 @@ import (
 	"github.com/Nikiosna/tailweave/internal/weave"
 )
 
+// DefaultSocket is where the daemon serves its API unless configured otherwise.
+const DefaultSocket = "/run/tailweave/tailweave.sock"
+
 // Config is tailweave's configuration file.
 type Config struct {
 	// Tailnets in priority order: on collisions the first one keeps its IPs and names.
@@ -18,7 +21,7 @@ type Config struct {
 	AutoMap  *bool           `json:"autoMap"` // initial value; later changes live in the state file (default true)
 	Pool     netip.Prefix    `json:"pool"`    // addresses for mappings (default 198.18.0.0/15)
 	DNS      netip.Addr      `json:"dns"`     // address of the DNS service (default 100.100.100.100)
-	Listen   string          `json:"listen"`  // UI and API (default 127.0.0.1:5250)
+	Socket   string          `json:"socket"`  // Unix socket of the API (default DefaultSocket)
 	State    string          `json:"state"`   // state file (default state.json next to the config)
 }
 
@@ -52,8 +55,8 @@ func LoadConfig(path string) (Config, error) {
 	if !c.DNS.IsValid() {
 		c.DNS = netip.MustParseAddr("100.100.100.100")
 	}
-	if c.Listen == "" {
-		c.Listen = "127.0.0.1:5250"
+	if c.Socket == "" {
+		c.Socket = DefaultSocket
 	}
 	if c.State == "" {
 		c.State = filepath.Join(filepath.Dir(path), "state.json")

@@ -6,8 +6,6 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
-	"io"
-	"net/http"
 	"net/netip"
 	"os"
 	"os/exec"
@@ -17,26 +15,25 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Nikiosna/tailweave/internal/client"
 	"github.com/Nikiosna/tailweave/internal/daemon"
 	"github.com/Nikiosna/tailweave/internal/labtest"
 	"github.com/Nikiosna/tailweave/internal/weave"
 )
-
-const api = "http://127.0.0.1:5250"
 
 // TestWeave runs tailweave against the playground and checks from the host itself that
 // both tailnets are reachable by name and IP, with and without auto-mapping.
 func TestWeave(t *testing.T) {
 	labtest.RequireLab(t)
 	labtest.Playground(t)
-	startTailweave(t)
+	tw := startTailweave(t)
 
 	// b's MagicDNS domain is a.lab in the dns-suffix scenario.
 	domB := "b.lab"
 	if labtest.Scenario() == "dns-suffix" {
 		domB = "a.lab"
 	}
-	st := waitState(t, func(s daemon.State) bool { return device(s, "b", "peer-b3") != nil })
+	st := waitState(t, tw, func(s daemon.State) bool { return device(s, "b", "peer-b3") != nil })
 
 	t.Run("names", func(t *testing.T) {
 		for _, tc := range []struct{ host, want string }{
@@ -75,7 +72,7 @@ func TestWeave(t *testing.T) {
 	})
 
 	t.Run("manual", func(t *testing.T) {
-		s := call(t, http.MethodPut, "/api/options", map[string]bool{"autoMap": false})
+		s := must(t)(tw.SetAutoMap(t.Context(), false))
 		if b1 := device(s, "b", "peer-b1"); b1.RoutedIP.IsValid() {
 			t.Errorf("peer-b1 still routed to %s without auto-mapping", b1.RoutedIP)
 		}
@@ -91,8 +88,7 @@ func TestWeave(t *testing.T) {
 			t.Errorf("no unresolved IP conflict listed: %+v", s.Conflicts)
 		}
 
-		s = call(t, http.MethodPost, "/api/mappings", daemon.MappingRequest{
-			Tailnet: "b", PeerID: device(s, "b", "peer-b1").PeerID, IP: netip.MustParseAddr("198.18.0.42")})
+		s = must(t)(tw.Map(t.Context(), "b", device(s, "b", "peer-b1").PeerID, netip.MustParseAddr("198.18.0.42")))
 		flushDNS(t)
 		if got := curl(t, "peer-b1."+domB); got != "peer-b1" {
 			t.Errorf("curl peer-b1 after manual mapping = %q", got)
@@ -104,9 +100,61 @@ func TestWeave(t *testing.T) {
 			t.Errorf("curl peer-a1 after mapping b's device away = %q", got)
 		}
 	})
+
+	// The same through the command line, as a user would do it.
+	t.Run("cli", func(t *testing.T) {
+		cli := func(cmd string, args ...string) string {
+			t.Helper()
+			args = append([]string{"-n", tw.bin, cmd, "-socket", tw.Socket}, args...)
+			out, err := exec.Command("sudo", args...).CombinedOutput()
+			if err != nil {
+				t.Fatalf("tailweave %s %v: %v\n%s", cmd, args[5:], err, out)
+			}
+			return string(out)
+		}
+		if out := cli("map", "b", "peer-b2", "198.18.0.43"); !strings.Contains(out, "198.18.0.43") {
+			t.Errorf("map: %s", out)
+		}
+		flushDNS(t)
+		if got := curl(t, "peer-b2."+domB); got != "peer-b2" {
+			t.Errorf("curl peer-b2 after cli map = %q", got)
+		}
+		out := cli("status")
+		for _, want := range []string{"auto-mapping off", "198.18.0.42", "198.18.0.43", "manual"} {
+			if !strings.Contains(out, want) {
+				t.Errorf("status lacks %q:\n%s", want, out)
+			}
+		}
+		if out := cli("unmap", "b", "peer-b2"); !strings.Contains(out, "not routed") {
+			t.Errorf("unmap: %s", out)
+		}
+		if out := cli("set", "-auto-map=true"); !strings.Contains(out, "auto-mapping on") {
+			t.Errorf("set: %s", out)
+		}
+		s := waitState(t, tw, func(s daemon.State) bool { return device(s, "b", "peer-b2").RoutedIP.IsValid() })
+		if b2 := device(s, "b", "peer-b2"); b2.Mapping == nil || !b2.Mapping.Auto {
+			t.Errorf("peer-b2 not auto-mapped again: %+v", b2)
+		}
+	})
 }
 
-func startTailweave(t *testing.T) {
+// tailweave is a daemon started by a test, with a client for its API.
+type tailweave struct {
+	*client.Client
+	bin string
+}
+
+func must(t *testing.T) func(daemon.State, error) daemon.State {
+	return func(s daemon.State, err error) daemon.State {
+		t.Helper()
+		if err != nil {
+			t.Fatal(err)
+		}
+		return s
+	}
+}
+
+func startTailweave(t *testing.T) tailweave {
 	t.Helper()
 	dir := t.TempDir()
 	bin := filepath.Join(dir, "tailweave")
@@ -121,6 +169,7 @@ func startTailweave(t *testing.T) {
 		t.Fatal(err)
 	}
 	cfg["state"] = filepath.Join(dir, "state.json")
+	cfg["socket"] = filepath.Join(dir, "tailweave.sock")
 	b, _ = json.Marshal(cfg)
 	conf := filepath.Join(dir, "config.json")
 	if err := os.WriteFile(conf, b, 0o644); err != nil {
@@ -146,45 +195,27 @@ func startTailweave(t *testing.T) {
 			t.Logf("tailweave log:\n%s", log.String())
 		}
 	})
+
+	// The socket is root's only; open it up so the test's own client can use it.
+	sock := cfg["socket"].(string)
+	for i := 0; exec.Command("sudo", "-n", "chmod", "0666", sock).Run() != nil; i++ {
+		if i == 30 {
+			t.Fatalf("no API socket at %s:\n%s", sock, log.String())
+		}
+		time.Sleep(time.Second)
+	}
+	return tailweave{client.New(sock), bin}
 }
 
-func call(t *testing.T, method, path string, body any) daemon.State {
-	t.Helper()
-	var rd io.Reader
-	if body != nil {
-		b, _ := json.Marshal(body)
-		rd = bytes.NewReader(b)
-	}
-	req, _ := http.NewRequest(method, api+path, rd)
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		t.Fatalf("%s %s: %v", method, path, err)
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		msg, _ := io.ReadAll(resp.Body)
-		t.Fatalf("%s %s: %s: %s", method, path, resp.Status, msg)
-	}
-	var s daemon.State
-	if err := json.NewDecoder(resp.Body).Decode(&s); err != nil {
-		t.Fatal(err)
-	}
-	return s
-}
-
-func waitState(t *testing.T, ok func(daemon.State) bool) daemon.State {
+func waitState(t *testing.T, tw tailweave, ok func(daemon.State) bool) daemon.State {
 	t.Helper()
 	var last string
 	for range 30 {
-		if resp, err := http.Get(api + "/api/state"); err == nil {
-			var s daemon.State
-			err = json.NewDecoder(resp.Body).Decode(&s)
-			resp.Body.Close()
-			if err == nil && ok(s) {
-				return s
-			}
-			last = fmt.Sprintf("%+v", s)
+		s, err := tw.State(t.Context())
+		if err == nil && ok(s) {
+			return s
 		}
+		last = fmt.Sprintf("%+v %v", s, err)
 		time.Sleep(time.Second)
 	}
 	t.Fatalf("tailweave did not reach the expected state, last: %s", last)

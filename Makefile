@@ -22,7 +22,7 @@ endif
 LAB := $(IN_LAB) lab/scripts
 
 .PHONY: help vm-up vm-down vm-destroy sh lab-up lab-status lab-reset playground-up playground-down \
-	run ui-check ui-tunnel build test test-lab lint fmt
+	run ui ui-check ui-tunnel build test test-lab lint fmt
 
 help: ## Show targets
 	@grep -hE '^[a-z-]+:.*## ' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  %-16s %s\n", $$1, $$2}'
@@ -60,13 +60,16 @@ playground-up: ## Two tailscaled in two netns, one per tailnet (no tailweave)
 playground-down: ## Remove playground namespaces
 	$(LAB)/netns-playground.sh down
 
-run: build ## Run tailweave against the playground (UI on 127.0.0.1:5250 in the VM)
+run: build ## Run tailweave against the playground (control it with sudo bin/tailweave ...)
 	$(IN_LAB) sudo bin/tailweave run -config lab/tailweave.json
+
+ui: build ## Web UI for `make run` on 127.0.0.1:5250 in the VM
+	$(IN_LAB) sudo bin/tailweave ui
 
 ui-check: ## Click through the UI in headless Chromium, screenshots in lab/.state/ui
 	$(SH) 'lab/scripts/ui-check.sh'
 
-ui-tunnel: ## Make the UI of `make run` reachable at http://127.0.0.1:5250 on the host
+ui-tunnel: ## Make the UI of `make ui` reachable at http://127.0.0.1:5250 on the host
 	ssh -F $(HOME)/.lima/$(VM)/ssh.config -N -L 5250:127.0.0.1:5250 lima-$(VM)
 
 # --- Go --------------------------------------------------------------------

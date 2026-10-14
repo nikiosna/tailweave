@@ -1,7 +1,6 @@
 package daemon
 
 import (
-	_ "embed"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -11,9 +10,6 @@ import (
 
 	"github.com/Nikiosna/tailweave/internal/weave"
 )
-
-//go:embed ui.html
-var uiHTML []byte
 
 // State is the answer of GET /api/state.
 type State struct {
@@ -43,13 +39,9 @@ type MappingRequest struct {
 	IP      netip.Addr `json:"ip"`
 }
 
-// Handler serves the UI and the JSON API.
+// Handler serves the JSON API used by the CLI and by `tailweave ui`.
 func (d *Daemon) Handler() http.Handler {
 	mux := http.NewServeMux()
-	mux.HandleFunc("GET /{$}", func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		_, _ = w.Write(uiHTML)
-	})
 	mux.HandleFunc("GET /api/state", func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, d.State())
 	})
@@ -90,7 +82,7 @@ func (d *Daemon) Handler() http.Handler {
 	return mux
 }
 
-// State returns a snapshot for the UI.
+// State returns a snapshot of the merged tailnets.
 func (d *Daemon) State() State {
 	d.mu.Lock()
 	defer d.mu.Unlock()

@@ -2,11 +2,11 @@
 
 Be a real node in several tailnets at once: with TUN, UDP and MagicDNS, no proxy.
 tailweave detects conflicts between the tailnets, shows them, and lets you resolve
-them with a click.
+them from the command line.
 
 > **Status: experimental.** On Linux, tailweave merges tailnets whose tailscaled
 > instances already run in network namespaces (see the lab): routing, collision
-> handling, MagicDNS and a small UI work. It does not manage the instances itself yet.
+> handling, MagicDNS, a CLI and an optional web UI work. It does not manage the instances itself yet.
 
 ## Why
 
@@ -20,11 +20,13 @@ forward TCP, so WebRTC, QUIC and programs without proxy support don't work throu
 - **One merged address space.** Every peer keeps its real tailnet IP and is routed into
   the right instance. Only when the same IP exists in several tailnets is a device
   remapped: automatically (the tailnet listed first keeps the IP, the others get an
-  address from `198.18.0.0/15`) or by hand in the UI.
+  address from `198.18.0.0/15`) or by hand (`tailweave map`).
 - **Own DNS service** replacing MagicDNS: names always resolve to the IP the device is
   actually reachable at, so collisions only matter when you type raw IPs.
-- **Daemon with UI:** see tailnets, peers and conflicts, switch auto-mapping, map
-  devices by hand. Later: add and log into tailnets.
+- **Daemon with a CLI:** `tailweave status` shows tailnets, peers and conflicts,
+  `tailweave set -auto-map=...` switches auto-mapping, `tailweave map`/`unmap` map
+  devices by hand. `tailweave ui` starts an optional web UI for the same. Later: add and
+  log into tailnets.
 
 ## Conflicts it detects
 
@@ -59,7 +61,9 @@ make vm-up                    # Linux VM via Lima; all targets run inside it
 make lab-up SCENARIO=all      # base | subnets | exit-nodes | dns-suffix | all
 make lab-status
 make playground-up            # two plain tailscaleds in netns tw-a / tw-b
-make run                      # tailweave on top of them, UI on 127.0.0.1:5250
+make run                      # tailweave on top of them
+make sh                       # second shell: sudo bin/tailweave status
+make ui                       # optional web UI on 127.0.0.1:5250 (make ui-tunnel)
 make test-lab
 make ui-check                 # click through the UI in headless Chromium
 make lab-reset

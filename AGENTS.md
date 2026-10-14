@@ -22,8 +22,11 @@ no personal paths. Commit locally only; pushing is done by the maintainer.
      unrouted until the user maps a device by hand (`TestWeave`)
    - [x] DNS service on 100.100.100.100 (`internal/dns`), registered with
      systemd-resolved for the tailnet domains; names resolve to the routed IP
-   - [x] Daemon + minimal UI (`tailweave run`, `internal/daemon`): peers, conflicts,
+   - [x] Daemon + CLI (`tailweave run`, `internal/daemon`): peers, conflicts,
      auto-mapping toggle, manual mappings. Attaches to the playground's namespaces
+   - [x] CLI first: API only on a Unix socket (`/run/tailweave/tailweave.sock`, root),
+     `tailweave status|set|map|unmap` via `internal/client`; the web UI (`internal/ui`)
+     runs only on demand with `tailweave ui`
    - [ ] Inbound: peers connecting to services on the host
    - [ ] Remaining conflicts: subnet routes (same merge model), exit nodes
    - [ ] Daemon manages the instances itself: create namespaces, add/log into tailnets
@@ -61,8 +64,10 @@ Keep this list current when finishing or starting a step.
   (veth 10.200.<n>.0/30, control sockets `/run/tailweave-lab/<net>.sock`).
   `lab/scripts/netns-playground.sh exec <a|b> <cmd>` and `... ts <a|b> <args>`.
   `down` also deletes the `dut-*` nodes from headscale.
-- `make run` starts tailweave against the playground (config `lab/tailweave.json`);
-  `make ui-tunnel` makes its UI reachable on the host at http://127.0.0.1:5250.
+- `make run` starts tailweave against the playground (config `lab/tailweave.json`).
+  Control it from a second shell (`make sh`) with `sudo bin/tailweave status` etc.
+  `make ui` starts the optional web UI, `make ui-tunnel` makes it reachable on the host
+  at http://127.0.0.1:5250.
 - `make ui-check` clicks through the UI in headless Chromium (Playwright, installed into
   `/opt/tailweave-browser` in the VM on first use) and checks the effect on DNS.
   Screenshots land in `lab/.state/ui/`; look at them after UI changes.
@@ -76,6 +81,9 @@ Keep this list current when finishing or starting a step.
   there is no GitHub repository so far.
 
 ## Gotchas
+
+- tailweave is CLI first. Everything must be doable with `tailweave <command>`; the web
+  UI is optional, never started by `run`, and only talks to the daemon's API.
 
 - Lima port forwarding is disabled on purpose: guest tailscaled would collide with a
   Tailscale client on the host (UDP 41641).

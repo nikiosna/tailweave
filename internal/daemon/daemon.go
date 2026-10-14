@@ -1,5 +1,5 @@
 // Package daemon runs tailweave: it watches every tailnet instance, computes the merged
-// address plan, applies it to the host, serves DNS and offers a small UI and JSON API.
+// address plan, applies it to the host, serves DNS and offers a JSON API on a Unix socket.
 package daemon
 
 import (
@@ -9,6 +9,8 @@ import (
 	"net"
 	"net/http"
 	"net/netip"
+	"os"
+	"path/filepath"
 	"slices"
 	"sync"
 	"time"
@@ -77,18 +79,18 @@ func (d *Daemon) Run(ctx context.Context) error {
 	}
 	defer d.dns.Close()
 
-	ln, err := net.Listen("tcp", d.cfg.Listen)
+	ln, err := listenUnix(d.cfg.Socket)
 	if err != nil {
 		return err
 	}
 	srv := &http.Server{Handler: d.Handler(), ReadHeaderTimeout: 5 * time.Second}
 	go func() {
 		if err := srv.Serve(ln); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			slog.Error("ui", "err", err)
+			slog.Error("api", "err", err)
 		}
 	}()
-	defer srv.Close()
-	slog.Info("tailweave running", "ui", "http://"+ln.Addr().String(), "dns", d.cfg.DNS)
+	defer srv.Close() // also removes the socket file
+	slog.Info("tailweave running", "socket", d.cfg.Socket, "dns", d.cfg.DNS)
 
 	t := time.NewTicker(PollInterval)
 	defer t.Stop()
@@ -102,6 +104,25 @@ func (d *Daemon) Run(ctx context.Context) error {
 		case <-t.C:
 		}
 	}
+}
+
+// listenUnix listens on a Unix socket only root can use, replacing a stale one.
+func listenUnix(path string) (net.Listener, error) {
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return nil, err
+	}
+	if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return nil, err
+	}
+	ln, err := net.Listen("unix", path)
+	if err != nil {
+		return nil, err
+	}
+	if err := os.Chmod(path, 0o600); err != nil {
+		ln.Close()
+		return nil, err
+	}
+	return ln, nil
 }
 
 // reconcile fetches every tailnet's status, recomputes the plan and applies it.
