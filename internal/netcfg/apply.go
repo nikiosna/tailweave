@@ -39,7 +39,8 @@ var dockerRules = [][]string{
 // IP forwarding and NAT for the namespaces, and the DNS link.
 func (h *Host) Setup() error {
 	h.Teardown()
-	if err := run("", "ip", "rule", "add", "pref", fmt.Sprint(RulePref), "lookup", fmt.Sprint(Table)); err != nil {
+	// iif lo matches locally generated traffic only; forwarded traffic never sees Table.
+	if err := run("", "ip", "rule", "add", "pref", fmt.Sprint(RulePref), "iif", "lo", "lookup", fmt.Sprint(Table)); err != nil {
 		return err
 	}
 	if h.Transit.IsValid() {

@@ -29,6 +29,27 @@ forward TCP, so WebRTC, QUIC and programs without proxy support don't work throu
   devices by hand, `logout`/`remove` leave a tailnet. `tailweave ui` starts an optional
   web UI showing the same.
 
+## What reaches what
+
+tailweave connects **this machine** to several tailnets. It does not connect the
+tailnets with each other or with your LAN:
+
+- **This machine → tailnets:** programs on the host reach every routed peer in every
+  tailnet, by name or IP.
+- **Tailnet → tailnet:** no. A peer in one tailnet cannot reach a peer in another one
+  through tailweave. Each instance advertises no routes, so peers only ever send it
+  traffic for its own address. Its namespace also refuses to forward anything that
+  arrives from the tailnet, and the host forwards no new connections between namespaces.
+- **LAN → tailnets:** no. tailweave routes only traffic the host itself generates into
+  the tailnets and drops new forwarded connections into the namespaces, so a device
+  that routes `100.64.0.0/10` via your machine does not get into a tailnet. Containers
+  and VMs on the host count as forwarded traffic too and don't reach the tailnets.
+- **Tailnets → this machine:** not yet. Inbound connections to services on the host are
+  planned.
+
+Programs on the host can still relay between tailnets on their own (a proxy, an SSH
+tunnel), just as with any two VPNs running side by side.
+
 ## Conflicts it detects
 
 | Conflict | Resolution options |

@@ -34,6 +34,8 @@ no personal paths. Commit locally only; pushing is done by the maintainer.
      (`TestWeave`, `TestLifecycle`)
    - [x] SSO login via web link: without a key, `tailweave login` prints the control
      server's login URL and waits; tested against Dex in the lab (`TestLoginSSO`)
+   - [x] Isolation: only the host reaches the tailnets; no forwarding from the LAN, between
+     namespaces, or from a tailnet out of its namespace (`TestIsolation`)
    - [ ] Inbound: peers connecting to services on the host
    - [ ] Remaining conflicts: subnet routes (same merge model), exit nodes
 3. **macOS version** as a Network Extension *(later; Lima can also run macOS VMs)*
@@ -108,9 +110,11 @@ Keep this list current when finishing or starting a step.
 - Pass auth keys to `tailscale up` as `--auth-key=file:...` so they don't show up in `ps`.
 - Do not name host interfaces `tw-*` other than the playground veths (iptables match `tw-+`).
   tailweave's DNS link is `tailweave0` and its veths are `twh<i>` for that reason.
-- tailweave owns routing table 5250 (ip rule pref 5250), nft table `inet tailweave`
-  in each namespace and nft table `ip tailweave` on the host (masquerade for the transit
-  range), plus two `twh+` ACCEPT rules in iptables `DOCKER-USER` if that chain exists
+- tailweave owns routing table 5250 (ip rule pref 5250, `iif lo`, so only locally
+  generated traffic uses it), nft table `inet tailweave` in each namespace (DNAT, forward
+  filter that drops new traffic from the tailnet, masquerade) and nft table `ip tailweave`
+  on the host (masquerade for the transit range, forward filter that drops new traffic
+  into `twh+`), plus two `twh+` ACCEPT rules in iptables `DOCKER-USER` if that chain exists
   (Docker sets FORWARD to DROP). It removes them, the namespaces and its tailscaleds on
   exit; the tailscaled state in `<stateDir>/tailnets/<name>` stays. It also sets the
   host's `net.ipv4.ip_forward=1` and leaves it on. tailscaled's own netfilter rules in

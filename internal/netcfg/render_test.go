@@ -49,6 +49,11 @@ table inet tailweave {
 		type nat hook prerouting priority dstnat; policy accept;
 		ip daddr 198.18.0.1 dnat ip to 100.64.0.1
 	}
+	chain forward {
+		type filter hook forward priority filter; policy accept;
+		iifname "ts-b" ct state established,related accept
+		iifname "ts-b" drop
+	}
 	chain postrouting {
 		type nat hook postrouting priority srcnat; policy accept;
 		oifname "ts-b" ip saddr != 100.64.0.0/10 masquerade
@@ -67,6 +72,11 @@ table ip tailweave {
 	chain postrouting {
 		type nat hook postrouting priority srcnat; policy accept;
 		ip saddr 10.201.0.0/16 oifname != "twh*" masquerade
+	}
+	chain forward {
+		type filter hook forward priority filter; policy accept;
+		oifname "twh*" ct state established,related accept
+		oifname "twh*" drop
 	}
 }
 `
