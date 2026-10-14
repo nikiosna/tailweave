@@ -1,0 +1,86 @@
+# Lima VM for the tailweave lab (macOS hosts).
+# On a Linux host you do not need this: install the same packages and run the lab directly.
+#
+# Started via `make vm-up`, which mounts the repository writable at the same path.
+
+minimumLimaVersion: 2.0.0
+
+base:
+- template:_images/ubuntu-24.04
+
+vmType: vz
+cpus: 4
+memory: 8GiB
+disk: 30GiB
+
+# The Makefile sets .mounts[0].location to the repository root.
+mounts: []
+
+# Do not forward guest ports to the host: the lab's tailscaled instances would otherwise
+# collide with a Tailscale client running on the Mac (UDP 41641).
+portForwards:
+- guestIP: "0.0.0.0"
+  guestPortRange: [1, 65535]
+  proto: any
+  ignore: true
+
+containerd:
+  system: false
+  user: false
+
+param:
+  TAILSCALE_VERSION: "1.102.5"
+  GO_VERSION: "1.27.2"
+
+provision:
+- mode: system
+  script: |
+    #!/bin/bash
+    set -eux -o pipefail
+    export DEBIAN_FRONTEND=noninteractive
+    apt-get update
+    apt-get install -y --no-install-recommends \
+      ca-certificates curl gnupg jq make git \
+      iproute2 iptables nftables dnsutils iperf3 socat tcpdump netcat-openbsd \
+      conntrack iputils-ping
+- mode: system
+  script: |
+    #!/bin/bash
+    set -eux -o pipefail
+    command -v docker >/dev/null 2>&1 && exit 0
+    curl -fsSL https://get.docker.com | sh
+    usermod -aG docker {{.User}}
+- mode: system
+  script: |
+    #!/bin/bash
+    set -eux -o pipefail
+    v="{{.Param.TAILSCALE_VERSION}}"
+    if ! tailscale version 2>/dev/null | head -1 | grep -qx "$v"; then
+      curl -fsSL https://pkgs.tailscale.com/stable/ubuntu/noble.noarmor.gpg -o /usr/share/keyrings/tailscale-archive-keyring.gpg
+      curl -fsSL https://pkgs.tailscale.com/stable/ubuntu/noble.tailscale-keyring.list -o /etc/apt/sources.list.d/tailscale.list
+      apt-get update
+      DEBIAN_FRONTEND=noninteractive apt-get install -y --allow-downgrades "tailscale=$v"
+      apt-mark hold tailscale
+    fi
+    # The lab runs its own tailscaled instances in network namespaces.
+    systemctl disable --now tailscaled || true
+- mode: system
+  script: |
+    #!/bin/bash
+    set -eux -o pipefail
+    v="{{.Param.GO_VERSION}}"
+    if [ "$(/usr/local/go/bin/go env GOVERSION 2>/dev/null)" != "go$v" ]; then
+      rm -rf /usr/local/go
+      curl -fsSL "https://go.dev/dl/go$v.linux-$(dpkg --print-architecture).tar.gz" | tar -C /usr/local -xz
+    fi
+    echo 'export PATH=/usr/local/go/bin:$HOME/go/bin:$PATH' > /etc/profile.d/go.sh
+    sysctl -w net.ipv4.ip_forward=1
+    echo 'net.ipv4.ip_forward=1' > /etc/sysctl.d/90-tailweave.conf
+
+probes:
+- script: |
+    #!/bin/bash
+    set -eux -o pipefail
+    timeout 120s bash -c "until command -v docker && pgrep dockerd; do sleep 3; done"
+    timeout 60s bash -c "until command -v tailscaled && test -x /usr/local/go/bin/go; do sleep 3; done"
+  hint: See "/var/log/cloud-init-output.log" in the guest

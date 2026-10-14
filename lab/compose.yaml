@@ -1,0 +1,174 @@
+# tailweave lab: two headscale control servers with deliberately identical IP ranges,
+# plus tailscale peers in each tailnet. Driven by lab/scripts/*.sh, not meant for
+# `docker compose up` on its own (peers need preauth keys from bootstrap.sh).
+#
+# Profiles add conflict scenarios:
+#   subnets     overlapping subnet routes (A and B both route 10.99.0.0/24),
+#               and a route equal to the Lima VM LAN (192.168.5.0/24)
+#   exit-nodes  one exit node in each tailnet
+
+name: tailweave-lab
+
+x-headscale: &headscale
+  image: headscale/headscale:${HEADSCALE_VERSION:-0.29.4}
+  command: serve
+  restart: unless-stopped
+  volumes:
+    - ./headscale/config.yaml:/etc/headscale/config.yaml:ro
+
+x-peer: &peer
+  build:
+    context: ./peer
+    args:
+      TAILSCALE_VERSION: v${TAILSCALE_VERSION:-1.102.5}
+  image: tailweave-lab-peer:${TAILSCALE_VERSION:-1.102.5}
+  restart: unless-stopped
+  devices:
+    - /dev/net/tun:/dev/net/tun
+  cap_add:
+    - NET_ADMIN
+    - NET_RAW
+  sysctls:
+    net.ipv4.ip_forward: "1"
+    net.ipv6.conf.all.forwarding: "1"
+
+x-peer-a-env: &peer-a-env
+  TS_AUTHKEY: ${KEY_A:-}
+  TS_EXTRA_ARGS: --login-server=http://172.30.0.10:8080
+  TS_USERSPACE: "false"
+  TS_STATE_DIR: /var/lib/tailscale
+  TS_ACCEPT_DNS: "false"
+
+x-peer-b-env: &peer-b-env
+  TS_AUTHKEY: ${KEY_B:-}
+  TS_EXTRA_ARGS: --login-server=http://172.30.0.11:8080
+  TS_USERSPACE: "false"
+  TS_STATE_DIR: /var/lib/tailscale
+  TS_ACCEPT_DNS: "false"
+
+services:
+  headscale-a:
+    <<: *headscale
+    container_name: headscale-a
+    environment:
+      HEADSCALE_SERVER_URL: http://172.30.0.10:8080
+      HEADSCALE_DNS_BASE_DOMAIN: ${A_BASE_DOMAIN:-a.lab}
+    volumes:
+      - ./headscale/config.yaml:/etc/headscale/config.yaml:ro
+      - headscale-a:/var/lib/headscale
+    networks:
+      lab: { ipv4_address: 172.30.0.10 }
+
+  headscale-b:
+    <<: *headscale
+    container_name: headscale-b
+    environment:
+      HEADSCALE_SERVER_URL: http://172.30.0.11:8080
+      HEADSCALE_DNS_BASE_DOMAIN: ${B_BASE_DOMAIN:-b.lab}
+    volumes:
+      - ./headscale/config.yaml:/etc/headscale/config.yaml:ro
+      - headscale-b:/var/lib/headscale
+    networks:
+      lab: { ipv4_address: 172.30.0.11 }
+
+  # --- tailnet A -----------------------------------------------------------
+  peer-a1:
+    <<: *peer
+    container_name: peer-a1
+    hostname: peer-a1
+    environment: { <<: *peer-a-env, TS_HOSTNAME: peer-a1 }
+    volumes: [peer-a1:/var/lib/tailscale]
+    networks: [lab]
+  peer-a2:
+    <<: *peer
+    container_name: peer-a2
+    hostname: peer-a2
+    environment: { <<: *peer-a-env, TS_HOSTNAME: peer-a2 }
+    volumes: [peer-a2:/var/lib/tailscale]
+    networks: [lab]
+  router-a:
+    <<: *peer
+    profiles: [subnets]
+    container_name: router-a
+    hostname: router-a
+    environment:
+      <<: *peer-a-env
+      TS_HOSTNAME: router-a
+      TS_ROUTES: 10.99.0.0/24
+      LAB_EXTRA_ADDRS: 10.99.0.1/32
+    volumes: [router-a:/var/lib/tailscale]
+    networks: [lab]
+  exit-a:
+    <<: *peer
+    profiles: [exit-nodes]
+    container_name: exit-a
+    hostname: exit-a
+    environment:
+      <<: *peer-a-env
+      TS_HOSTNAME: exit-a
+      TS_EXTRA_ARGS: --login-server=http://172.30.0.10:8080 --advertise-exit-node
+    volumes: [exit-a:/var/lib/tailscale]
+    networks: [lab]
+
+  # --- tailnet B -----------------------------------------------------------
+  peer-b1:
+    <<: *peer
+    container_name: peer-b1
+    hostname: peer-b1
+    environment: { <<: *peer-b-env, TS_HOSTNAME: peer-b1 }
+    volumes: [peer-b1:/var/lib/tailscale]
+    networks: [lab]
+  peer-b2:
+    <<: *peer
+    container_name: peer-b2
+    hostname: peer-b2
+    environment: { <<: *peer-b-env, TS_HOSTNAME: peer-b2 }
+    volumes: [peer-b2:/var/lib/tailscale]
+    networks: [lab]
+  router-b:
+    <<: *peer
+    profiles: [subnets]
+    container_name: router-b
+    hostname: router-b
+    environment:
+      <<: *peer-b-env
+      TS_HOSTNAME: router-b
+      TS_ROUTES: 10.99.0.0/24,192.168.5.0/24
+      LAB_EXTRA_ADDRS: 10.99.0.1/32
+    volumes: [router-b:/var/lib/tailscale]
+    networks: [lab]
+  exit-b:
+    <<: *peer
+    profiles: [exit-nodes]
+    container_name: exit-b
+    hostname: exit-b
+    environment:
+      <<: *peer-b-env
+      TS_HOSTNAME: exit-b
+      TS_EXTRA_ARGS: --login-server=http://172.30.0.11:8080 --advertise-exit-node
+    volumes: [exit-b:/var/lib/tailscale]
+    networks: [lab]
+
+networks:
+  lab:
+    driver_opts:
+      com.docker.network.bridge.name: twlab0
+      # Docker >= 28 drops traffic to container IPs that does not come from the bridge itself.
+      # The DUT's network namespaces route to the headscales from outside, so disable that.
+      com.docker.network.bridge.gateway_mode_ipv4: nat-unprotected
+    ipam:
+      config:
+        - subnet: 172.30.0.0/24
+          ip_range: 172.30.0.128/25
+
+volumes:
+  headscale-a:
+  headscale-b:
+  peer-a1:
+  peer-a2:
+  router-a:
+  exit-a:
+  peer-b1:
+  peer-b2:
+  router-b:
+  exit-b:

@@ -1,0 +1,22 @@
+# Build output
+/bin/
+/dist/
+*.test
+*.out
+coverage.*
+
+# Lab runtime state: headscale data, preauth keys, scenario
+/lab/.state/
+
+# Local config and secrets
+.env
+.env.*
+*.local.*
+.claude/settings.local.json
+
+# OS / editors
+.DS_Store
+.idea/
+.vscode/
+*.swp
+*~
