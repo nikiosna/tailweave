@@ -4,7 +4,7 @@
       "Bash(make:*)",
       "Bash(limactl list:*)",
       "Bash(limactl shell tailweave:*)",
-      "Bash(limactl shell --workdir * tailweave:*)",
+      "Bash(limactl shell --workdir * tailweave *)",
       "Bash(git status:*)",
       "Bash(git diff:*)",
       "Bash(git log:*)",
