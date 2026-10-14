@@ -59,3 +59,18 @@ table inet tailweave {
 		t.Errorf("got:\n%s\nwant:\n%s", got, want)
 	}
 }
+
+func TestHostRules(t *testing.T) {
+	want := `table ip tailweave
+delete table ip tailweave
+table ip tailweave {
+	chain postrouting {
+		type nat hook postrouting priority srcnat; policy accept;
+		ip saddr 10.201.0.0/16 oifname != "twh*" masquerade
+	}
+}
+`
+	if got := HostRules(netip.MustParsePrefix("10.201.0.0/16")); got != want {
+		t.Errorf("HostRules:\n%s\nwant:\n%s", got, want)
+	}
+}

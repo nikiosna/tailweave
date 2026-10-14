@@ -99,12 +99,17 @@ function render() {
   $("dns").textContent = s.dns;
   $("automap").checked = s.autoMap;
 
-  $("tailnets").innerHTML = s.tailnets.map(t => `
+  const ts = s.tailnets || [];
+  $("tailnets").innerHTML = ts.length ? ts.map(t => `
     <div class="panel tailnet">
-      <b>${esc(t.name)}</b> <span class="muted">${esc(t.domain || "no MagicDNS")}</span><br>
-      <span class="muted">this machine:</span> ${esc(t.self || "–")} <span class="mono">${esc(t.ip)}</span>
-      ${t.error ? `<div class="err">${esc(t.error)}</div>` : ""}
-    </div>`).join("");
+      <b>${esc(t.name)}</b> <span class="chip ${t.state === "Running" ? "ok" : t.state === "NeedsLogin" ? "warn" : "bad"}">${esc(t.state)}</span>
+      <span class="muted">${esc(t.domain || (t.state === "Running" ? "no MagicDNS" : ""))}</span><br>
+      ${t.state === "Running"
+        ? `<span class="muted">this machine:</span> ${esc(t.self || "–")} <span class="mono">${esc(t.ip)}</span>`
+        : `<span class="muted">${esc(t.loginServer)}</span>`}
+      ${t.authURL ? `<div><a href="${esc(t.authURL)}" target="_blank" rel="noopener">Log in</a></div>` : ""}
+      ${t.loginError || t.error ? `<div class="err">${esc(t.loginError || t.error)}</div>` : ""}
+    </div>`).join("") : `<div class="panel empty">No tailnets yet. Add one with <span class="mono">tailweave login &lt;name&gt;</span>.</div>`;
 
   const cs = s.conflicts || [];
   $("conflicts").innerHTML = cs.length ? cs.map(c => `

@@ -32,6 +32,16 @@ hs() { # hs <tailnet> <headscale args...>
 	docker exec "${HS_CONTAINER[$net]}" headscale "$@"
 }
 
+# Remove the machine's own lab nodes (dut-<net>) from headscale, so old runs do not
+# linger as offline peers.
+forget_dut() {
+	local net=$1 id
+	for id in $(hs "$net" nodes list -o json | jq -r --arg p "dut-$net" \
+		'(. // [])[] | select(.given_name | startswith($p)) | .id'); do
+		hs "$net" nodes delete --identifier "$id" --force >/dev/null
+	done
+}
+
 # Retry a command until it succeeds or the timeout (seconds) runs out.
 wait_for() {
 	local timeout=$1 what=$2; shift 2

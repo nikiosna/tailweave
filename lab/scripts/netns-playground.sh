@@ -16,15 +16,6 @@ idx() { case $1 in a) echo 1 ;; b) echo 2 ;; *) die "unknown tailnet $1" ;; esac
 
 ts() { local net=$1; shift; $SUDO tailscale --socket="$RUN_DIR/$net.sock" "$@"; }
 
-# Remove the playground's nodes from headscale, so old runs do not linger as offline peers.
-forget_dut() {
-	local net=$1 id
-	for id in $(hs "$net" nodes list -o json | jq -r --arg p "dut-$net" \
-		'(. // [])[] | select(.given_name | startswith($p)) | .id'); do
-		hs "$net" nodes delete --identifier "$id" --force >/dev/null
-	done
-}
-
 up_ns() {
 	local net=$1 i; i=$(idx "$net")
 	local ns=tw-$net host=tw-$net-h peer=tw-$net-n

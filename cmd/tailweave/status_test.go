@@ -2,7 +2,10 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"net/netip"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -16,7 +19,8 @@ var testState = daemon.State{
 	Pool:    netip.MustParsePrefix("198.18.0.0/15"),
 	Tailnets: []daemon.TailnetState{
 		{Name: "a", Domain: "a.lab", Self: "dut-a", IP: netip.MustParseAddr("100.64.0.5")},
-		{Name: "b", Error: "connection refused"},
+		{Name: "b", State: "Down", Error: "connection refused"},
+		{Name: "c", State: "NeedsLogin", AuthURL: "http://hs/register/x"},
 	},
 	Devices: []weave.Device{
 		{Tailnet: "a", PeerID: "1", Name: "peer-a1", DNSName: "peer-a1.a.lab.", Online: true,
@@ -42,6 +46,7 @@ func TestPrintStatus(t *testing.T) {
 		"auto-mapping on, DNS on 100.100.100.100, pool 198.18.0.0/15",
 		"dut-a",
 		"connection refused",
+		"log in at http://hs/register/x",
 		"peer-b1 (offline)",
 		"198.18.0.1",
 		"auto",
@@ -72,5 +77,72 @@ func TestPickDevice(t *testing.T) {
 	}
 	if _, err := pickDevice(testState, "a", "peer-b1"); err == nil {
 		t.Error("found peer-b1 in tailnet a")
+	}
+}
+
+func TestReadAuthKey(t *testing.T) {
+	file := filepath.Join(t.TempDir(), "key")
+	if err := os.WriteFile(file, []byte("tskey-file\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		flag, stdin, want string
+		ok                bool
+	}{
+		{"", "", "", true},
+		{"file:" + file, "", "tskey-file", true},
+		{"-", " tskey-stdin\n", "tskey-stdin", true},
+		{"tskey-literal", "", "", false},
+		{"-", "\n", "", false},
+		{"file:/nonexistent", "", "", false},
+	} {
+		got, err := readAuthKey(tc.flag, strings.NewReader(tc.stdin))
+		if got != tc.want || (err == nil) != tc.ok {
+			t.Errorf("readAuthKey(%q) = %q, %v", tc.flag, got, err)
+		}
+	}
+}
+
+func TestWaitLogin(t *testing.T) {
+	states := []daemon.TailnetState{
+		{Name: "a", State: "Starting"},
+		{Name: "a", State: "NeedsLogin", AuthURL: "http://hs/register/1"},
+		{Name: "a", State: "NeedsLogin", AuthURL: "http://hs/register/1"},
+		{Name: "a", State: "Running", Self: "dut", IP: netip.MustParseAddr("100.64.0.9")},
+	}
+	n := 0
+	state := func(context.Context) (daemon.State, error) {
+		s := daemon.State{Tailnets: []daemon.TailnetState{{Name: "b", State: "Running"}, states[min(n, len(states)-1)]}}
+		n++
+		return s, nil
+	}
+	var out bytes.Buffer
+	if err := waitLogin(context.Background(), state, "a", &out); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Count(out.String(), "http://hs/register/1") != 1 || !strings.Contains(out.String(), "logged in to a as dut (100.64.0.9)") {
+		t.Errorf("output:\n%s", out.String())
+	}
+
+	failed := func(context.Context) (daemon.State, error) {
+		return daemon.State{Tailnets: []daemon.TailnetState{{Name: "a", State: "NeedsLogin", LoginError: "invalid key"}}}, nil
+	}
+	if err := waitLogin(context.Background(), failed, "a", &out); err == nil || !strings.Contains(err.Error(), "invalid key") {
+		t.Errorf("err = %v", err)
+	}
+}
+
+func TestParseInterspersed(t *testing.T) {
+	fs, socket := flags("login")
+	key := fs.String("auth-key", "", "")
+	if err := parse(fs, []string{"a", "-auth-key", "file:k", "-socket=/s"}, 1); err != nil {
+		t.Fatal(err)
+	}
+	if fs.Arg(0) != "a" || fs.NArg() != 1 || *key != "file:k" || *socket != "/s" {
+		t.Errorf("args %v, key %q, socket %q", fs.Args(), *key, *socket)
+	}
+	fs, _ = flags("map")
+	if err := parse(fs, []string{"b", "peer-b1", "198.18.0.9"}, 2); err == nil {
+		t.Error("three arguments accepted where two are expected")
 	}
 }

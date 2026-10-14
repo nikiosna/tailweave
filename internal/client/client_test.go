@@ -50,11 +50,23 @@ func TestRequests(t *testing.T) {
 	if _, err := c.Unmap(ctx, "b", "n/1"); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := c.Login(ctx, daemon.LoginRequest{Name: "work", LoginServer: "https://hs", AuthKey: "k"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.Logout(ctx, "work"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.Remove(ctx, "work"); err != nil {
+		t.Fatal(err)
+	}
 	want := []string{
 		"GET /api/state null",
 		`PUT /api/options {"autoMap":false}`,
 		`POST /api/mappings {"ip":"198.18.0.42","peer":"n1","tailnet":"b"}`,
 		"DELETE /api/mappings/b/n%2F1 null",
+		`POST /api/tailnets {"authKey":"k","loginServer":"https://hs","name":"work"}`,
+		"POST /api/tailnets/work/logout null",
+		"DELETE /api/tailnets/work null",
 	}
 	if strings.Join(got, "\n") != strings.Join(want, "\n") {
 		t.Errorf("requests:\n%s\nwant:\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))

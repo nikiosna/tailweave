@@ -4,9 +4,9 @@ Be a real node in several tailnets at once: with TUN, UDP and MagicDNS, no proxy
 tailweave detects conflicts between the tailnets, shows them, and lets you resolve
 them from the command line.
 
-> **Status: experimental.** On Linux, tailweave merges tailnets whose tailscaled
-> instances already run in network namespaces (see the lab): routing, collision
-> handling, MagicDNS, a CLI and an optional web UI work. It does not manage the instances itself yet.
+> **Status: experimental.** On Linux, tailweave runs one tailscaled per tailnet in its own
+> network namespace and merges the tailnets: login with a preauth key, routing, collision
+> handling, MagicDNS, a CLI and an optional web UI work.
 
 ## Why
 
@@ -23,10 +23,11 @@ forward TCP, so WebRTC, QUIC and programs without proxy support don't work throu
   address from `198.18.0.0/15`) or by hand (`tailweave map`).
 - **Own DNS service** replacing MagicDNS: names always resolve to the IP the device is
   actually reachable at, so collisions only matter when you type raw IPs.
-- **Daemon with a CLI:** `tailweave status` shows tailnets, peers and conflicts,
+- **Daemon with a CLI:** `tailweave login <name>` adds a tailnet (web link or
+  `-auth-key file:<path>`), `tailweave status` shows tailnets, peers and conflicts,
   `tailweave set -auto-map=...` switches auto-mapping, `tailweave map`/`unmap` map
-  devices by hand. `tailweave ui` starts an optional web UI for the same. Later: add and
-  log into tailnets.
+  devices by hand, `logout`/`remove` leave a tailnet. `tailweave ui` starts an optional
+  web UI showing the same.
 
 ## Conflicts it detects
 
@@ -60,8 +61,8 @@ offering TCP, UDP and iperf3 test services, and scenarios for the conflicts abov
 make vm-up                    # Linux VM via Lima; all targets run inside it
 make lab-up SCENARIO=all      # base | subnets | exit-nodes | dns-suffix | all
 make lab-status
-make playground-up            # two plain tailscaleds in netns tw-a / tw-b
-make run                      # tailweave on top of them
+make run                      # the tailweave daemon
+make lab-login                # second shell: log it into both tailnets
 make sh                       # second shell: sudo bin/tailweave status
 make ui                       # optional web UI on 127.0.0.1:5250 (make ui-tunnel)
 make test-lab

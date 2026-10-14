@@ -38,10 +38,11 @@ func TestStatus(t *testing.T) {
 	go func() { _ = srv.Serve(ln) }()
 	t.Cleanup(func() { _ = srv.Close() })
 
-	tn, err := New(sock).Status(context.Background(), "b")
+	st, err := New(sock).Status(context.Background(), "b")
 	if err != nil {
 		t.Fatal(err)
 	}
+	tn := st.Tailnet
 	if tn.Name != "b" || tn.Domain != "b.lab" || tn.Self.Name != "dut-b" || len(tn.Peers) != 1 {
 		t.Fatalf("tailnet = %+v", tn)
 	}
@@ -51,8 +52,10 @@ func TestStatus(t *testing.T) {
 	}
 }
 
-func TestNotRunning(t *testing.T) {
-	if _, err := convert("a", status{BackendState: "NeedsLogin"}); err == nil {
-		t.Error("expected error for a backend that is not running")
+func TestNeedsLogin(t *testing.T) {
+	s := convert("a", status{BackendState: "NeedsLogin", AuthURL: "http://hs/register/x",
+		Self: &node{HostName: "dut-a"}})
+	if s.Running() || s.AuthURL != "http://hs/register/x" || s.Tailnet.Name != "" {
+		t.Errorf("status = %+v", s)
 	}
 }

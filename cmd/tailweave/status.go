@@ -18,12 +18,22 @@ func printStatus(w io.Writer, s daemon.State) {
 	tw := tabwriter.NewWriter(w, 0, 4, 2, ' ', 0)
 	fmt.Fprintf(tw, "auto-mapping %s, DNS on %s, pool %s\n\n", onOff(s.AutoMap), s.DNS, s.Pool)
 
-	fmt.Fprintln(tw, "TAILNET\tDOMAIN\tTHIS MACHINE\tIP\t")
+	if len(s.Tailnets) == 0 {
+		fmt.Fprintln(tw, "no tailnets yet, add one with `tailweave login <name>`")
+	} else {
+		fmt.Fprintln(tw, "TAILNET\tSTATE\tDOMAIN\tTHIS MACHINE\tIP\t")
+	}
 	for _, t := range s.Tailnets {
-		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\n", t.Name, or(t.Domain, "-"), or(t.Self, "-"), ip(t.IP), t.Error)
+		note := or(t.LoginError, t.Error)
+		if t.AuthURL != "" {
+			note = "log in at " + t.AuthURL
+		}
+		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\n", t.Name, t.State, or(t.Domain, "-"), or(t.Self, "-"), ip(t.IP), note)
 	}
 
-	fmt.Fprintln(tw, "\nTAILNET\tDEVICE\tREAL IP\tREACHABLE AT\tMAPPING")
+	if len(s.Devices) > 0 {
+		fmt.Fprintln(tw, "\nTAILNET\tDEVICE\tREAL IP\tREACHABLE AT\tMAPPING")
+	}
 	for _, d := range s.Devices {
 		name := d.Name
 		if !d.Online {

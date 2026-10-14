@@ -43,38 +43,51 @@ type node struct {
 
 type status struct {
 	BackendState   string
+	AuthURL        string
 	MagicDNSSuffix string
 	CurrentTailnet *struct{ MagicDNSEnabled bool }
 	Self           *node
 	Peer           map[string]*node
 }
 
-// Status returns the tailnet as weave sees it. name is tailweave's name for the tailnet.
-func (c *Client) Status(ctx context.Context, name string) (weave.Tailnet, error) {
+// Status is a tailscaled's login state and, while it is Running, its tailnet.
+type Status struct {
+	Backend string        // tailscaled's BackendState: NeedsLogin, Starting, Running, Stopped, ...
+	AuthURL string        // where to log in, while a login is pending
+	Tailnet weave.Tailnet // only filled while Running
+}
+
+// Running reports whether the instance is logged in and connected.
+func (s Status) Running() bool { return s.Backend == "Running" }
+
+// Status returns the instance's state and the tailnet as weave sees it. name is
+// tailweave's name for the tailnet.
+func (c *Client) Status(ctx context.Context, name string) (Status, error) {
 	// The host name is required by tailscaled; it ignores the rest of the URL authority.
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet,
 		"http://local-tailscaled.sock/localapi/v0/status", nil)
 	if err != nil {
-		return weave.Tailnet{}, err
+		return Status{}, err
 	}
 	resp, err := c.http.Do(req)
 	if err != nil {
-		return weave.Tailnet{}, err
+		return Status{}, err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return weave.Tailnet{}, fmt.Errorf("localapi status: %s", resp.Status)
+		return Status{}, fmt.Errorf("localapi status: %s", resp.Status)
 	}
 	var st status
 	if err := json.NewDecoder(resp.Body).Decode(&st); err != nil {
-		return weave.Tailnet{}, fmt.Errorf("decode status: %w", err)
+		return Status{}, fmt.Errorf("decode status: %w", err)
 	}
-	return convert(name, st)
+	return convert(name, st), nil
 }
 
-func convert(name string, st status) (weave.Tailnet, error) {
-	if st.BackendState != "Running" {
-		return weave.Tailnet{}, fmt.Errorf("tailscaled is %s, not Running", st.BackendState)
+func convert(name string, st status) Status {
+	s := Status{Backend: st.BackendState, AuthURL: st.AuthURL}
+	if !s.Running() {
+		return s
 	}
 	tn := weave.Tailnet{Name: name}
 	if st.CurrentTailnet != nil && st.CurrentTailnet.MagicDNSEnabled {
@@ -86,7 +99,8 @@ func convert(name string, st status) (weave.Tailnet, error) {
 	for _, n := range st.Peer {
 		tn.Peers = append(tn.Peers, peer(n))
 	}
-	return tn, nil
+	s.Tailnet = tn
+	return s
 }
 
 func peer(n *node) weave.Peer {

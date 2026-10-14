@@ -23,13 +23,18 @@ no personal paths. Commit locally only; pushing is done by the maintainer.
    - [x] DNS service on 100.100.100.100 (`internal/dns`), registered with
      systemd-resolved for the tailnet domains; names resolve to the routed IP
    - [x] Daemon + CLI (`tailweave run`, `internal/daemon`): peers, conflicts,
-     auto-mapping toggle, manual mappings. Attaches to the playground's namespaces
+     auto-mapping toggle, manual mappings
    - [x] CLI first: API only on a Unix socket (`/run/tailweave/tailweave.sock`, root),
      `tailweave status|set|map|unmap` via `internal/client`; the web UI (`internal/ui`)
      runs only on demand with `tailweave ui`
+   - [x] Daemon manages the instances itself (`internal/instance`): `tailweave login`
+     creates namespace `tailweave-<name>`, veth `twh<i>`/`twn<i>` from 10.201.0.0/16 and a
+     supervised tailscaled, and logs in with a preauth key (`-auth-key file:|-`);
+     `logout`, `remove`; tailnets live in the state file and survive restarts
+     (`TestWeave`, `TestLifecycle`)
+   - [ ] SSO login via web link, tested against an OIDC provider (Dex) in the lab
    - [ ] Inbound: peers connecting to services on the host
    - [ ] Remaining conflicts: subnet routes (same merge model), exit nodes
-   - [ ] Daemon manages the instances itself: create namespaces, add/log into tailnets
 3. **macOS version** as a Network Extension *(later; Lima can also run macOS VMs)*
 
 Keep this list current when finishing or starting a step.
@@ -61,11 +66,14 @@ Keep this list current when finishing or starting a step.
 - Peer test services: HTTP :80 and UDP :8 return the peer name, UDP :7 echo,
   iperf3 server. Use them to tell which tailnet answered.
 - `make playground-up` runs plain tailscaled per tailnet in netns `tw-a` / `tw-b`
-  (veth 10.200.<n>.0/30, control sockets `/run/tailweave-lab/<net>.sock`).
+  (veth 10.200.<n>.0/30, control sockets `/run/tailweave-lab/<net>.sock`), without
+  tailweave; only `TestPlaygroundIsolation` uses it.
   `lab/scripts/netns-playground.sh exec <a|b> <cmd>` and `... ts <a|b> <args>`.
   `down` also deletes the `dut-*` nodes from headscale.
-- `make run` starts tailweave against the playground (config `lab/tailweave.json`).
-  Control it from a second shell (`make sh`) with `sudo bin/tailweave status` etc.
+- `make run` starts the tailweave daemon (config `lab/tailweave.json`, state in
+  `/var/lib/tailweave-lab/tailweave`). `make lab-login` logs it into both tailnets as
+  `dut-a`/`dut-b` with the preauth keys (`lab/scripts/login.sh`). Control it from a
+  second shell (`make sh`) with `sudo bin/tailweave status` etc.
   `make ui` starts the optional web UI, `make ui-tunnel` makes it reachable on the host
   at http://127.0.0.1:5250.
 - `make ui-check` clicks through the UI in headless Chromium (Playwright, installed into
@@ -76,7 +84,8 @@ Keep this list current when finishing or starting a step.
 
 - `make test`: unit tests. `make test-lab`: integration tests with build tag `lab`,
   need a running lab. Helpers in `internal/labtest`. Lab test packages run one at a
-  time (`-p 1`) because they share the playground.
+  time (`-p 1`) because they share the lab and the host's network setup. Tests log in
+  as `dut-<net>` and delete those nodes from headscale afterwards.
 - CI (`.github/workflows/ci.yml`) runs both; the lab job has not run yet because
   there is no GitHub repository so far.
 
@@ -84,7 +93,6 @@ Keep this list current when finishing or starting a step.
 
 - tailweave is CLI first. Everything must be doable with `tailweave <command>`; the web
   UI is optional, never started by `run`, and only talks to the daemon's API.
-
 - Lima port forwarding is disabled on purpose: guest tailscaled would collide with a
   Tailscale client on the host (UDP 41641).
 - The lab docker network uses `gateway_mode_ipv4: nat-unprotected`; without it
@@ -92,10 +100,16 @@ Keep this list current when finishing or starting a step.
 - Headscale CLI returns `null` instead of `[]` for empty lists; guard with `(. // [])`.
 - Pass auth keys to `tailscale up` as `--auth-key=file:...` so they don't show up in `ps`.
 - Do not name host interfaces `tw-*` other than the playground veths (iptables match `tw-+`).
-  tailweave's DNS link is `tailweave0` for that reason.
-- tailweave owns routing table 5250 (ip rule pref 5250) and nft table `inet tailweave`
-  in each namespace; it removes them on exit. tailscaled's own netfilter rules in the
-  namespaces stay on and let the forwarded host traffic through.
+  tailweave's DNS link is `tailweave0` and its veths are `twh<i>` for that reason.
+- tailweave owns routing table 5250 (ip rule pref 5250), nft table `inet tailweave`
+  in each namespace and nft table `ip tailweave` on the host (masquerade for the transit
+  range), plus two `twh+` ACCEPT rules in iptables `DOCKER-USER` if that chain exists
+  (Docker sets FORWARD to DROP). It removes them, the namespaces and its tailscaleds on
+  exit; the tailscaled state in `<stateDir>/tailnets/<name>` stays. It also sets the
+  host's `net.ipv4.ip_forward=1` and leaves it on. tailscaled's own netfilter rules in
+  the namespaces stay on and let the forwarded host traffic through.
+- Each namespace gets `/etc/netns/<ns>/resolv.conf` with the host's real upstream servers
+  (from `/run/systemd/resolve/resolv.conf`), so tailscaled can reach its control server.
 - Pinned versions: headscale 0.29.4, tailscale 1.102.5, Go 1.27.2, Playwright 1.64.0 (in
   `lab/compose.yaml`, `lab/lima/tailweave.yaml`, `lab/scripts/ui-check.sh`, CI). Bump them
   together.

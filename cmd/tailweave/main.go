@@ -1,10 +1,9 @@
 // Command tailweave joins one machine to several tailnets at once.
 //
-// For now `tailweave run` attaches to tailscaled instances that already run in their own
-// network namespaces (see lab/scripts/netns-playground.sh) and merges their tailnets into
-// the host: routes, collision handling and DNS. The other commands control the running
-// daemon through its Unix socket; `tailweave ui` adds an optional web UI on top. See
-// AGENTS.md for the roadmap.
+// `tailweave run` is the daemon: it runs one tailscaled per tailnet in its own network
+// namespace and merges the tailnets into the host: routes, collision handling and DNS.
+// The other commands control it through its Unix socket; `tailweave login` adds tailnets.
+// `tailweave ui` adds an optional web UI on top. See AGENTS.md for the roadmap.
 package main
 
 import (
@@ -33,7 +32,11 @@ var version = "dev"
 const usage = `usage: tailweave <command> [flags]
 
 commands:
-  run [-config <file>]               merge the configured tailnets into this machine
+  run [-config <file>]               the daemon: merge all tailnets into this machine
+  login <tailnet> [flags]            add a tailnet or log in again: via a web link, or
+                                     with -auth-key file:<path>|- (see login -h)
+  logout <tailnet>                   log out; the tailnet stays known
+  remove <tailnet>                   log out and forget the tailnet
   status [-json]                     tailnets, devices and conflicts
   set -auto-map=<true|false>         remap colliding devices automatically or not
   map <tailnet> <device> [<ip>]      route a device at an IP (default: a free pool address)
@@ -61,6 +64,12 @@ func main() {
 	switch cmd {
 	case "run":
 		err = run(ctx, args)
+	case "login":
+		err = login(ctx, args)
+	case "logout":
+		err = logout(ctx, args)
+	case "remove":
+		err = remove(ctx, args)
 	case "status":
 		err = status(ctx, args)
 	case "set":
@@ -86,22 +95,38 @@ func main() {
 	}
 }
 
+func newFlagSet(cmd string) *flag.FlagSet {
+	fs := flag.NewFlagSet(cmd, flag.ContinueOnError)
+	fs.Usage = func() {
+		fmt.Fprintf(os.Stderr, "usage of tailweave %s:\n", cmd)
+		fs.PrintDefaults()
+	}
+	return fs
+}
+
 // flags returns a flag set for cmd with the -socket flag every daemon command has.
 func flags(cmd string) (*flag.FlagSet, *string) {
-	fs := flag.NewFlagSet(cmd, flag.ContinueOnError)
-	fs.Usage = func() { fmt.Fprint(os.Stderr, usage) }
+	fs := newFlagSet(cmd)
 	return fs, fs.String("socket", daemon.DefaultSocket, "Unix socket of the daemon")
 }
 
-// parse parses the flags and checks that the number of remaining arguments is one of
-// nargs (default: none).
+// parse parses the flags, which may also follow the arguments (`login a -auth-key ...`),
+// and checks that the number of arguments is one of nargs (default: none).
 func parse(fs *flag.FlagSet, args []string, nargs ...int) error {
-	if err := fs.Parse(args); err != nil {
-		if errors.Is(err, flag.ErrHelp) {
-			os.Exit(0)
+	var pos []string
+	for {
+		if err := fs.Parse(args); err != nil {
+			if errors.Is(err, flag.ErrHelp) {
+				os.Exit(0)
+			}
+			os.Exit(2) // the flag package has printed the problem and the usage
 		}
-		os.Exit(2) // the flag package has printed the problem and the usage
+		if fs.NArg() == 0 {
+			break
+		}
+		pos, args = append(pos, fs.Arg(0)), fs.Args()[1:]
 	}
+	_ = fs.Parse(append([]string{"--"}, pos...)) // makes fs.Arg see the arguments
 	if len(nargs) == 0 {
 		nargs = []int{0}
 	}
@@ -112,9 +137,8 @@ func parse(fs *flag.FlagSet, args []string, nargs ...int) error {
 }
 
 func run(ctx context.Context, args []string) error {
-	fs := flag.NewFlagSet("run", flag.ContinueOnError)
-	fs.Usage = func() { fmt.Fprint(os.Stderr, usage) }
-	config := fs.String("config", "/etc/tailweave/config.json", "config file")
+	fs := newFlagSet("run")
+	config := fs.String("config", "/etc/tailweave/config.json", "config file (optional)")
 	if err := parse(fs, args); err != nil {
 		return err
 	}

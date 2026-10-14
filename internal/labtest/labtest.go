@@ -12,6 +12,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -113,4 +114,36 @@ func Scenario() string {
 		}
 	}
 	return ""
+}
+
+// LoginServer returns the control URL of a lab tailnet.
+func LoginServer(tailnet string) string {
+	return map[string]string{TailnetA: "http://172.30.0.10:8080", TailnetB: "http://172.30.0.11:8080"}[tailnet]
+}
+
+// AuthKeyFile writes the lab's reusable preauth key for a tailnet into a file in dir and
+// returns its path.
+func AuthKeyFile(t testing.TB, dir, tailnet string) string {
+	t.Helper()
+	f := strings.Fields(Run(t, "lab/scripts/keys.sh", tailnet))
+	if len(f) != 2 {
+		t.Fatalf("keys.sh %s printed %d fields", tailnet, len(f))
+	}
+	path := filepath.Join(dir, "authkey-"+tailnet)
+	if err := os.WriteFile(path, []byte(f[1]), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+// ForgetNodes deletes the nodes whose name starts with prefix from a tailnet, so earlier
+// test runs do not linger as offline peers.
+func ForgetNodes(t testing.TB, tailnet, prefix string) {
+	t.Helper()
+	for _, n := range Nodes(t, tailnet) {
+		if strings.HasPrefix(n.Name, prefix) {
+			Run(t, "docker", "exec", "headscale-"+tailnet, "headscale", "nodes", "delete",
+				"--identifier", strconv.FormatUint(n.ID, 10), "--force")
+		}
+	}
 }

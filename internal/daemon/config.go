@@ -14,36 +14,39 @@ import (
 // DefaultSocket is where the daemon serves its API unless configured otherwise.
 const DefaultSocket = "/run/tailweave/tailweave.sock"
 
-// Config is tailweave's configuration file.
+// DefaultLoginServer is the control server used when a login names none.
+const DefaultLoginServer = "https://controlplane.tailscale.com"
+
+// Config is tailweave's configuration file. Every field is optional; tailnets are not
+// configured here but added with `tailweave login` and kept in the state.
 type Config struct {
-	// Tailnets in priority order: on collisions the first one keeps its IPs and names.
-	Tailnets []TailnetConfig `json:"tailnets"`
-	AutoMap  *bool           `json:"autoMap"` // initial value; later changes live in the state file (default true)
-	Pool     netip.Prefix    `json:"pool"`    // addresses for mappings (default 198.18.0.0/15)
-	DNS      netip.Addr      `json:"dns"`     // address of the DNS service (default 100.100.100.100)
-	Socket   string          `json:"socket"`  // Unix socket of the API (default DefaultSocket)
-	State    string          `json:"state"`   // state file (default state.json next to the config)
+	AutoMap  *bool        `json:"autoMap"`  // initial value; later changes live in the state file (default true)
+	Pool     netip.Prefix `json:"pool"`     // addresses for mappings (default 198.18.0.0/15)
+	DNS      netip.Addr   `json:"dns"`      // address of the DNS service (default 100.100.100.100)
+	Socket   string       `json:"socket"`   // Unix socket of the API (default DefaultSocket)
+	StateDir string       `json:"stateDir"` // state file and tailscaled state (default /var/lib/tailweave)
+	Transit  netip.Prefix `json:"transit"`  // veth addresses of the namespaces, a /30 each (default 10.201.0.0/16)
+
+	// Tailnets is no longer supported; it only exists to reject old config files clearly.
+	Tailnets json.RawMessage `json:"tailnets,omitempty"`
 }
 
-// TailnetConfig says where a tailnet's tailscaled runs. The namespace is set up by
-// someone else for now (lab/scripts/netns-playground.sh).
-type TailnetConfig struct {
-	Name    string     `json:"name"`
-	Netns   string     `json:"netns"`
-	Socket  string     `json:"socket"`  // tailscaled LocalAPI socket
-	Gateway netip.Addr `json:"gateway"` // the namespace's veth address, seen from the host
-	Tun     string     `json:"tun"`     // TUN interface inside the namespace (default ts-<name>)
-}
-
-// LoadConfig reads and validates a config file and fills in defaults.
+// LoadConfig reads and validates a config file and fills in defaults. A missing file
+// at path means all defaults.
 func LoadConfig(path string) (Config, error) {
 	var c Config
 	b, err := os.ReadFile(path)
-	if err != nil {
+	switch {
+	case errors.Is(err, os.ErrNotExist):
+	case err != nil:
 		return c, err
+	default:
+		if err := json.Unmarshal(b, &c); err != nil {
+			return c, fmt.Errorf("%s: %w", path, err)
+		}
 	}
-	if err := json.Unmarshal(b, &c); err != nil {
-		return c, fmt.Errorf("%s: %w", path, err)
+	if c.Tailnets != nil {
+		return c, fmt.Errorf("%s: tailnets are no longer configured in the config file, add them with `tailweave login`", path)
 	}
 	if c.AutoMap == nil {
 		t := true
@@ -58,36 +61,37 @@ func LoadConfig(path string) (Config, error) {
 	if c.Socket == "" {
 		c.Socket = DefaultSocket
 	}
-	if c.State == "" {
-		c.State = filepath.Join(filepath.Dir(path), "state.json")
+	if c.StateDir == "" {
+		c.StateDir = "/var/lib/tailweave"
 	}
-	if len(c.Tailnets) == 0 {
-		return c, errors.New("no tailnets configured")
-	}
-	seen := map[string]bool{}
-	for i := range c.Tailnets {
-		t := &c.Tailnets[i]
-		if t.Name == "" || t.Netns == "" || t.Socket == "" || !t.Gateway.IsValid() {
-			return c, fmt.Errorf("tailnet %d: name, netns, socket and gateway are required", i)
-		}
-		if seen[t.Name] {
-			return c, fmt.Errorf("tailnet %q configured twice", t.Name)
-		}
-		seen[t.Name] = true
-		if t.Tun == "" {
-			t.Tun = "ts-" + t.Name
-		}
+	if !c.Transit.IsValid() {
+		c.Transit = netip.MustParsePrefix("10.201.0.0/16")
 	}
 	if !c.Pool.Addr().Is4() {
 		return c, fmt.Errorf("pool %s is not IPv4", c.Pool)
 	}
+	if !c.Transit.Addr().Is4() || c.Transit.Bits() > 30 {
+		return c, fmt.Errorf("transit %s must be IPv4 and hold at least one /30", c.Transit)
+	}
 	return c, nil
 }
+
+func (c Config) statePath() string { return filepath.Join(c.StateDir, "state.json") }
 
 // state is what tailweave changes at runtime and keeps across restarts.
 type state struct {
 	AutoMap  bool            `json:"autoMap"`
+	Tailnets []tailnetEntry  `json:"tailnets"` // in priority order: the first keeps colliding IPs
 	Mappings []weave.Mapping `json:"mappings"`
+}
+
+// tailnetEntry is a tailnet added with `tailweave login`.
+type tailnetEntry struct {
+	Name        string `json:"name"`
+	LoginServer string `json:"loginServer"`
+	Hostname    string `json:"hostname"`
+	Index       int    `json:"index"`               // picks the veth names and transit /30
+	LoggedOut   bool   `json:"loggedOut,omitempty"` // no instance runs until the next login
 }
 
 func loadState(path string, autoMap bool) (state, error) {

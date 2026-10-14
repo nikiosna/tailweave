@@ -1,5 +1,6 @@
-// Package daemon runs tailweave: it watches every tailnet instance, computes the merged
-// address plan, applies it to the host, serves DNS and offers a JSON API on a Unix socket.
+// Package daemon runs tailweave: it runs one tailscaled per tailnet in its own network
+// namespace, computes the merged address plan, applies it to the host, serves DNS and
+// offers a JSON API on a Unix socket.
 package daemon
 
 import (
@@ -16,6 +17,7 @@ import (
 	"time"
 
 	"github.com/Nikiosna/tailweave/internal/dns"
+	"github.com/Nikiosna/tailweave/internal/instance"
 	"github.com/Nikiosna/tailweave/internal/netcfg"
 	"github.com/Nikiosna/tailweave/internal/tailnet"
 	"github.com/Nikiosna/tailweave/internal/weave"
@@ -26,47 +28,61 @@ const PollInterval = 2 * time.Second
 
 // Daemon is a running tailweave.
 type Daemon struct {
-	cfg     Config
-	host    *netcfg.Host
-	dns     dns.Server
-	clients map[string]*tailnet.Client
+	cfg Config
+	dns dns.Server
+	mgr *instance.Manager
 
-	reconcileMu sync.Mutex // one reconcile at a time
+	// opMu serializes reconciling and starting/stopping instances. It guards the fields
+	// below and is taken before mu.
+	opMu    sync.Mutex
+	host    *netcfg.Host
+	insts   map[string]*instance.Instance
+	clients map[string]*tailnet.Client
 
 	mu       sync.Mutex // guards the fields below
 	st       state
-	tailnets map[string]weave.Tailnet // last good status per tailnet
-	errs     map[string]string        // last status error per tailnet
+	tailnets map[string]weave.Tailnet // last good status per running tailnet
+	status   map[string]tailnetStatus
 	plan     weave.Plan
+}
+
+// tailnetStatus is the login state of a tailnet's instance, as of the last poll.
+type tailnetStatus struct {
+	backend    string // tailscaled's BackendState, or Down / LoggedOut
+	authURL    string
+	err        string // instance not reachable or not startable
+	loginError string // last login attempt failed
 }
 
 // New prepares a daemon; nothing is changed on the host until Run.
 func New(cfg Config) (*Daemon, error) {
-	st, err := loadState(cfg.State, *cfg.AutoMap)
+	st, err := loadState(cfg.statePath(), *cfg.AutoMap)
 	if err != nil {
 		return nil, err
 	}
-	d := &Daemon{
-		cfg:      cfg,
-		clients:  map[string]*tailnet.Client{},
-		st:       st,
-		tailnets: map[string]weave.Tailnet{},
-		errs:     map[string]string{},
+	return &Daemon{
+		cfg: cfg,
+		mgr: &instance.Manager{
+			Transit:  cfg.Transit,
+			StateDir: filepath.Join(cfg.StateDir, "tailnets"),
+			RunDir:   filepath.Join(filepath.Dir(cfg.Socket), "tailnets"),
+		},
 		host: &netcfg.Host{
 			DNSAddr: cfg.DNS,
 			Blocked: []netip.Prefix{netcfg.CGNAT, cfg.Pool},
+			Transit: cfg.Transit,
 		},
-	}
-	for _, t := range cfg.Tailnets {
-		d.clients[t.Name] = tailnet.New(t.Socket)
-		d.host.Namespaces = append(d.host.Namespaces, netcfg.Namespace{
-			Tailnet: t.Name, Netns: t.Netns, Gateway: t.Gateway, Tun: t.Tun})
-	}
-	return d, nil
+		insts:    map[string]*instance.Instance{},
+		clients:  map[string]*tailnet.Client{},
+		st:       st,
+		tailnets: map[string]weave.Tailnet{},
+		status:   map[string]tailnetStatus{},
+	}, nil
 }
 
-// Run configures the host and keeps it in line with the tailnets until ctx is done.
-// Everything is removed again on return.
+// Run configures the host, starts the instances of all logged-in tailnets and keeps the
+// host in line with them until ctx is done. Everything is removed again on return,
+// except the tailscaled state, so the tailnets stay logged in.
 func (d *Daemon) Run(ctx context.Context) error {
 	if err := d.host.Setup(); err != nil {
 		d.host.Teardown()
@@ -90,7 +106,16 @@ func (d *Daemon) Run(ctx context.Context) error {
 		}
 	}()
 	defer srv.Close() // also removes the socket file
-	slog.Info("tailweave running", "socket", d.cfg.Socket, "dns", d.cfg.DNS)
+
+	d.opMu.Lock()
+	for _, e := range d.entries() {
+		if !e.LoggedOut {
+			d.startInstance(e)
+		}
+	}
+	d.opMu.Unlock()
+	defer d.stopAll()
+	slog.Info("tailweave running", "socket", d.cfg.Socket, "dns", d.cfg.DNS, "tailnets", len(d.insts))
 
 	t := time.NewTicker(PollInterval)
 	defer t.Stop()
@@ -125,38 +150,102 @@ func listenUnix(path string) (net.Listener, error) {
 	return ln, nil
 }
 
+// entries returns a copy of the stored tailnets.
+func (d *Daemon) entries() []tailnetEntry {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return slices.Clone(d.st.Tailnets)
+}
+
+// startInstance starts a tailnet's instance; a failure shows up in its status. Callers
+// hold opMu.
+func (d *Daemon) startInstance(e tailnetEntry) error {
+	inst, err := d.mgr.Start(e.Name, e.Index)
+	if err != nil {
+		slog.Error("start instance", "tailnet", e.Name, "err", err)
+		d.setStatus(e.Name, tailnetStatus{backend: "Down", err: err.Error()})
+		return err
+	}
+	d.insts[e.Name] = inst
+	d.clients[e.Name] = tailnet.New(inst.Socket)
+	d.host.AddNamespace(inst.Namespace())
+	return nil
+}
+
+// stopInstance stops a tailnet's instance and forgets its peers. Callers hold opMu.
+func (d *Daemon) stopInstance(name string) {
+	if inst := d.insts[name]; inst != nil {
+		d.host.RemoveNamespace(name)
+		inst.Stop()
+	}
+	delete(d.insts, name)
+	delete(d.clients, name)
+	d.mu.Lock()
+	delete(d.tailnets, name)
+	delete(d.status, name)
+	d.mu.Unlock()
+}
+
+func (d *Daemon) stopAll() {
+	d.opMu.Lock()
+	defer d.opMu.Unlock()
+	for name := range d.insts {
+		d.stopInstance(name)
+	}
+}
+
+func (d *Daemon) setStatus(name string, s tailnetStatus) {
+	d.mu.Lock()
+	d.status[name] = s
+	d.mu.Unlock()
+}
+
 // reconcile fetches every tailnet's status, recomputes the plan and applies it.
 func (d *Daemon) reconcile(ctx context.Context) error {
-	d.reconcileMu.Lock()
-	defer d.reconcileMu.Unlock()
+	d.opMu.Lock()
+	defer d.opMu.Unlock()
 
 	type result struct {
-		tn  weave.Tailnet
+		st  tailnet.Status
 		err error
 	}
 	results := map[string]result{}
-	for _, t := range d.cfg.Tailnets {
-		tn, err := d.clients[t.Name].Status(ctx, t.Name)
-		results[t.Name] = result{tn, err}
+	for name, c := range d.clients {
+		st, err := c.Status(ctx, name)
+		results[name] = result{st, err}
 	}
 
 	d.mu.Lock()
-	for name, r := range results {
-		if r.err != nil {
-			// Keep the last known peers so a restarting instance does not reshuffle mappings.
-			if d.errs[name] != r.err.Error() {
-				slog.Warn("tailnet status", "tailnet", name, "err", r.err)
+	for _, e := range d.st.Tailnets {
+		r, ok := results[e.Name]
+		switch {
+		case !ok:
+			// No instance: logged out, or it failed to start (status set then).
+			delete(d.tailnets, e.Name)
+			if e.LoggedOut {
+				d.status[e.Name] = tailnetStatus{backend: "LoggedOut"}
 			}
-			d.errs[name] = r.err.Error()
-			continue
+		case r.err != nil:
+			// Keep the last known peers so a restarting instance does not reshuffle mappings.
+			if d.status[e.Name].err != r.err.Error() {
+				slog.Warn("tailnet status", "tailnet", e.Name, "err", r.err)
+			}
+			d.status[e.Name] = tailnetStatus{backend: "Down", err: r.err.Error(),
+				loginError: d.insts[e.Name].LoginError()}
+		default:
+			d.status[e.Name] = tailnetStatus{backend: r.st.Backend, authURL: r.st.AuthURL,
+				loginError: d.insts[e.Name].LoginError()}
+			if r.st.Running() {
+				d.tailnets[e.Name] = r.st.Tailnet
+			} else {
+				delete(d.tailnets, e.Name)
+			}
 		}
-		delete(d.errs, name)
-		d.tailnets[name] = r.tn
 	}
 	d.plan = d.compute()
 	if !slices.Equal(d.plan.Mappings, d.st.Mappings) {
 		d.st.Mappings = d.plan.Mappings
-		if err := saveState(d.cfg.State, d.st); err != nil {
+		if err := saveState(d.cfg.statePath(), d.st); err != nil {
 			slog.Error("save state", "err", err)
 		}
 	}
@@ -170,8 +259,8 @@ func (d *Daemon) reconcile(ctx context.Context) error {
 // compute recomputes the plan from the current state. Callers hold d.mu.
 func (d *Daemon) compute() weave.Plan {
 	var tns []weave.Tailnet
-	for _, t := range d.cfg.Tailnets {
-		if tn, ok := d.tailnets[t.Name]; ok {
+	for _, e := range d.st.Tailnets {
+		if tn, ok := d.tailnets[e.Name]; ok {
 			tns = append(tns, tn)
 		}
 	}

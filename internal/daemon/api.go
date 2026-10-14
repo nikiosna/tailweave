@@ -25,11 +25,15 @@ type State struct {
 
 // TailnetState is a tailnet's own status.
 type TailnetState struct {
-	Name   string     `json:"name"`
-	Domain string     `json:"domain"`
-	Self   string     `json:"self"` // this machine's name in the tailnet
-	IP     netip.Addr `json:"ip"`   // this machine's IP in the tailnet
-	Error  string     `json:"error,omitempty"`
+	Name        string     `json:"name"`
+	LoginServer string     `json:"loginServer"`
+	State       string     `json:"state"`             // Running, NeedsLogin, Starting, Down, LoggedOut, ...
+	AuthURL     string     `json:"authURL,omitempty"` // open it to complete a pending login
+	Domain      string     `json:"domain"`
+	Self        string     `json:"self"` // this machine's name in the tailnet
+	IP          netip.Addr `json:"ip"`   // this machine's IP in the tailnet
+	Error       string     `json:"error,omitempty"`
+	LoginError  string     `json:"loginError,omitempty"` // why the last login attempt failed
 }
 
 // MappingRequest is the body of POST /api/mappings. Without IP, a free pool address is used.
@@ -66,6 +70,19 @@ func (d *Daemon) Handler() http.Handler {
 		}
 		d.change(w, r, func() error { return d.setMapping(m) })
 	})
+	mux.HandleFunc("POST /api/tailnets", func(w http.ResponseWriter, r *http.Request) {
+		var req LoginRequest
+		if !readJSON(w, r, &req) {
+			return
+		}
+		d.tailnetChange(w, r, func() error { return d.login(req) })
+	})
+	mux.HandleFunc("POST /api/tailnets/{name}/logout", func(w http.ResponseWriter, r *http.Request) {
+		d.tailnetChange(w, r, func() error { return d.logout(r.PathValue("name")) })
+	})
+	mux.HandleFunc("DELETE /api/tailnets/{name}", func(w http.ResponseWriter, r *http.Request) {
+		d.tailnetChange(w, r, func() error { return d.remove(r.PathValue("name")) })
+	})
 	mux.HandleFunc("DELETE /api/mappings/{tailnet}/{peer}", func(w http.ResponseWriter, r *http.Request) {
 		key := weave.Mapping{Tailnet: r.PathValue("tailnet"), PeerID: r.PathValue("peer")}
 		d.change(w, r, func() error {
@@ -95,15 +112,19 @@ func (d *Daemon) State() State {
 		Conflicts:  d.plan.Conflicts,
 		Mappings:   d.st.Mappings,
 	}
-	for _, t := range d.cfg.Tailnets {
-		tn := d.tailnets[t.Name]
+	for _, e := range d.st.Tailnets {
+		tn, st := d.tailnets[e.Name], d.status[e.Name]
 		s.Tailnets = append(s.Tailnets, TailnetState{
-			Name: t.Name, Domain: tn.Domain, Self: tn.Self.Name, IP: tn.Self.IPv4(), Error: d.errs[t.Name]})
+			Name: e.Name, LoginServer: e.LoginServer, State: or(st.backend, "Starting"), AuthURL: st.authURL,
+			Domain: tn.Domain, Self: tn.Self.Name, IP: tn.Self.IPv4(), Error: st.err, LoginError: st.loginError})
 	}
 	return s
 }
 
-var errNotFound = errors.New("not found")
+var (
+	errNotFound = errors.New("not found")
+	errConflict = errors.New("conflict")
+)
 
 // setMapping replaces the mapping of a device with a manual one. Callers hold d.mu.
 func (d *Daemon) setMapping(req MappingRequest) error {
@@ -138,14 +159,39 @@ func (d *Daemon) change(w http.ResponseWriter, r *http.Request, f func() error) 
 	d.mu.Lock()
 	err := f()
 	if err == nil {
-		d.plan = d.compute()
-		d.st.Mappings = d.plan.Mappings
-		err = saveState(d.cfg.State, d.st)
+		err = d.commit()
 	}
 	d.mu.Unlock()
+	d.answer(w, r, err)
+}
+
+// tailnetChange runs f, which starts or stops instances and takes the locks it needs,
+// then recomputes and answers with the new state.
+func (d *Daemon) tailnetChange(w http.ResponseWriter, r *http.Request, f func() error) {
+	err := f()
+	if err == nil {
+		d.mu.Lock()
+		err = d.commit()
+		d.mu.Unlock()
+	}
+	d.answer(w, r, err)
+}
+
+// commit recomputes the plan and saves the state. Callers hold d.mu.
+func (d *Daemon) commit() error {
+	d.plan = d.compute()
+	d.st.Mappings = d.plan.Mappings
+	return saveState(d.cfg.statePath(), d.st)
+}
+
+// answer reports err, or applies the change and answers with the new state.
+func (d *Daemon) answer(w http.ResponseWriter, r *http.Request, err error) {
 	switch {
 	case errors.Is(err, errNotFound):
 		http.Error(w, err.Error(), http.StatusNotFound)
+		return
+	case errors.Is(err, errConflict):
+		http.Error(w, err.Error(), http.StatusConflict)
 		return
 	case err != nil:
 		http.Error(w, err.Error(), http.StatusBadRequest)
@@ -156,6 +202,13 @@ func (d *Daemon) change(w http.ResponseWriter, r *http.Request, f func() error) 
 		return
 	}
 	writeJSON(w, d.State())
+}
+
+func or(s, def string) string {
+	if s == "" {
+		return def
+	}
+	return s
 }
 
 func readJSON(w http.ResponseWriter, r *http.Request, v any) bool {

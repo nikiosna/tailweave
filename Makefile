@@ -22,7 +22,7 @@ endif
 LAB := $(IN_LAB) lab/scripts
 
 .PHONY: help vm-up vm-down vm-destroy sh lab-up lab-status lab-reset playground-up playground-down \
-	run ui ui-check ui-tunnel build test test-lab lint fmt
+	run lab-login ui ui-check ui-tunnel build test test-lab lint fmt
 
 help: ## Show targets
 	@grep -hE '^[a-z-]+:.*## ' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  %-16s %s\n", $$1, $$2}'
@@ -60,8 +60,11 @@ playground-up: ## Two tailscaled in two netns, one per tailnet (no tailweave)
 playground-down: ## Remove playground namespaces
 	$(LAB)/netns-playground.sh down
 
-run: build ## Run tailweave against the playground (control it with sudo bin/tailweave ...)
+run: build ## Run the tailweave daemon (then make lab-login; control it with sudo bin/tailweave ...)
 	$(IN_LAB) sudo bin/tailweave run -config lab/tailweave.json
+
+lab-login: build ## Log `make run` into both lab tailnets with their preauth keys
+	$(LAB)/login.sh
 
 ui: build ## Web UI for `make run` on 127.0.0.1:5250 in the VM
 	$(IN_LAB) sudo bin/tailweave ui

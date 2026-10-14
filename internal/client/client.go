@@ -58,6 +58,21 @@ func (c *Client) Unmap(ctx context.Context, tailnet, peerID string) (daemon.Stat
 	return c.do(ctx, http.MethodDelete, "/api/mappings/"+url.PathEscape(tailnet)+"/"+url.PathEscape(peerID), nil)
 }
 
+// Login adds a tailnet or logs it in again; it returns once the login has started.
+func (c *Client) Login(ctx context.Context, req daemon.LoginRequest) (daemon.State, error) {
+	return c.do(ctx, http.MethodPost, "/api/tailnets", req)
+}
+
+// Logout logs a tailnet out and stops its instance; it stays known to tailweave.
+func (c *Client) Logout(ctx context.Context, name string) (daemon.State, error) {
+	return c.do(ctx, http.MethodPost, "/api/tailnets/"+url.PathEscape(name)+"/logout", nil)
+}
+
+// Remove logs a tailnet out and deletes all that tailweave keeps about it.
+func (c *Client) Remove(ctx context.Context, name string) (daemon.State, error) {
+	return c.do(ctx, http.MethodDelete, "/api/tailnets/"+url.PathEscape(name), nil)
+}
+
 func (c *Client) do(ctx context.Context, method, path string, body any) (daemon.State, error) {
 	var s daemon.State
 	var rd io.Reader

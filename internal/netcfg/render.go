@@ -1,6 +1,7 @@
 // Package netcfg turns a weave.Plan into Linux network configuration: a routing table
-// on the host that sends every routed IP into its tailnet's namespace, and per-namespace
-// nftables rules that translate mapped IPs and masquerade host traffic.
+// on the host that sends every routed IP into its tailnet's namespace, per-namespace
+// nftables rules that translate mapped IPs and masquerade host traffic, and a host
+// nftables table that lets the namespaces reach the outside world.
 package netcfg
 
 import (
@@ -19,6 +20,9 @@ const (
 	RulePref = 5250
 	nftTable = "tailweave"
 )
+
+// VethPrefix starts the host side names of the namespaces' veth pairs ("twh0", ...).
+const VethPrefix = "twh"
 
 // CGNAT is the range Tailscale assigns node addresses from.
 var CGNAT = netip.MustParsePrefix("100.64.0.0/10")
@@ -73,6 +77,19 @@ func NamespaceRules(p weave.Plan, ns Namespace) string {
 	// Traffic from the host leaves with the instance's own tailnet IP; tailscaled's own
 	// traffic already has one.
 	fmt.Fprintf(&b, "\t\toifname %q ip saddr != %s masquerade\n", ns.Tun, CGNAT)
+	b.WriteString("\t}\n}\n")
+	return b.String()
+}
+
+// HostRules renders an `nft -f` script that atomically replaces tailweave's table on the
+// host: traffic from the namespaces' transit addresses leaves the host masqueraded, so
+// tailscaled can reach its control server and DERP.
+func HostRules(transit netip.Prefix) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "table ip %s\ndelete table ip %s\n", nftTable, nftTable)
+	fmt.Fprintf(&b, "table ip %s {\n", nftTable)
+	b.WriteString("\tchain postrouting {\n\t\ttype nat hook postrouting priority srcnat; policy accept;\n")
+	fmt.Fprintf(&b, "\t\tip saddr %s oifname != \"%s*\" masquerade\n", transit.Masked(), VethPrefix)
 	b.WriteString("\t}\n}\n")
 	return b.String()
 }
