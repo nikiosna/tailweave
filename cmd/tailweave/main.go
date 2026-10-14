@@ -1,6 +1,6 @@
 // Command tailweave joins one machine to several tailnets at once.
 //
-// Nothing is implemented yet; see docs/PLAN.de.md and the lab in lab/.
+// Nothing is implemented yet; see AGENTS.md for the roadmap and the lab in lab/.
 package main
 
 import (
