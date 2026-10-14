@@ -5,19 +5,24 @@ for larger changes please open an issue first.
 
 ## Development setup
 
-Everything runs on Linux. On macOS, the Makefile runs commands inside a
-[Lima](https://lima-vm.io) VM, so you only need `limactl` on the host.
+Everything runs on Linux, inside a [Lima](https://lima-vm.io) VM. The Makefile
+runs its targets in the VM on macOS and Linux alike, so you only need `limactl`
+on the host (on Linux also QEMU with KVM). The lab and the tests change routing
+tables, nftables and network namespaces and start their own tailscaled
+instances; the VM keeps all of that away from your machine.
 
 ```sh
-make vm-up        # macOS only: create the Linux VM (Docker, Go, tailscale)
+make vm-up        # create the Linux VM (Docker, Go, tailscale)
 make lab-up       # two headscale servers with identical IP ranges, plus peers
 make test         # unit tests
 make test-lab     # integration tests against the lab
 make lab-reset    # throw the lab away
 ```
 
-On Linux you need Docker (with compose), Go, `tailscale`/`tailscaled`,
-iproute2, iptables, jq and passwordless sudo.
+To run directly on a Linux host instead (as CI does), set `NO_VM=1`, e.g.
+`make test-lab NO_VM=1`. Only do that on a disposable machine. You then need
+Docker (with compose), Go, `tailscale`/`tailscaled`, iproute2, iptables, jq and
+passwordless sudo, and no Tailscale client of your own running.
 
 ## Conventions
 

@@ -1,5 +1,5 @@
 # Shared helpers for lab scripts. Source it, do not execute.
-# The lab runs on any Linux host with Docker; on macOS run it inside the Lima VM (make vm-up).
+# The lab runs on any Linux host with Docker; normally that is the Lima VM (make vm-up).
 
 set -euo pipefail
 

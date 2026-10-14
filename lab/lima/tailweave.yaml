@@ -1,5 +1,4 @@
-# Lima VM for the tailweave lab (macOS hosts).
-# On a Linux host you do not need this: install the same packages and run the lab directly.
+# Lima VM for the tailweave lab, used on macOS and Linux hosts alike.
 #
 # Started via `make vm-up`, which mounts the repository writable at the same path.
 
@@ -8,7 +7,7 @@ minimumLimaVersion: 2.0.0
 base:
 - template:_images/ubuntu-24.04
 
-vmType: vz
+# vmType is left to Lima: vz on macOS, qemu (KVM) on Linux.
 cpus: 4
 memory: 8GiB
 disk: 30GiB
@@ -17,7 +16,7 @@ disk: 30GiB
 mounts: []
 
 # Do not forward guest ports to the host: the lab's tailscaled instances would otherwise
-# collide with a Tailscale client running on the Mac (UDP 41641).
+# collide with a Tailscale client running on the host (UDP 41641).
 portForwards:
 - guestIP: "0.0.0.0"
   guestPortRange: [1, 65535]

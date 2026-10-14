@@ -55,7 +55,7 @@ offering TCP, UDP and iperf3 test services, and scenarios for the conflicts abov
 ```
 
 ```sh
-make vm-up                    # macOS: Linux VM via Lima (skip on Linux)
+make vm-up                    # Linux VM via Lima; all targets run inside it
 make lab-up SCENARIO=all      # base | subnets | exit-nodes | dns-suffix | all
 make lab-status
 make playground-up            # two plain tailscaleds in netns tw-a / tw-b

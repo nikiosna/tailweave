@@ -10,6 +10,8 @@ permissions:
 
 env:
   TAILSCALE_VERSION: "1.102.5"
+  # The runner is a throwaway Linux VM already; run make targets directly.
+  NO_VM: "1"
 
 jobs:
   check:

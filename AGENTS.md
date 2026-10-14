@@ -35,9 +35,10 @@ Keep this list current when finishing or starting a step.
 
 - Language: Go, module `github.com/Nikiosna/tailweave`. Binaries in `cmd/`,
   internal packages in `internal/`.
-- On macOS all Linux work happens in the Lima VM `tailweave` (`make vm-up`). The repo
-  is mounted at the same path: edit on the host, run via `make`, which wraps
-  `limactl shell` automatically. On Linux the targets run directly.
+- All Linux work happens in the Lima VM `tailweave` (`make vm-up`), on macOS and Linux
+  hosts alike, so the lab never touches the host's network. The repo is mounted at the
+  same path: edit on the host, run via `make`, which wraps `limactl shell`
+  automatically. `NO_VM=1` runs targets directly on a Linux host (used by CI).
 - Ad-hoc commands in the VM: `limactl shell --workdir $PWD tailweave -- <cmd>`
   (use `bash -lc '...'` when Go is needed; PATH comes from /etc/profile.d/go.sh).
 - `make help` lists all targets.
@@ -61,7 +62,7 @@ Keep this list current when finishing or starting a step.
   `lab/scripts/netns-playground.sh exec <a|b> <cmd>` and `... ts <a|b> <args>`.
   `down` also deletes the `dut-*` nodes from headscale.
 - `make run` starts tailweave against the playground (config `lab/tailweave.json`);
-  `make ui-tunnel` makes its UI reachable on the Mac at http://127.0.0.1:5250.
+  `make ui-tunnel` makes its UI reachable on the host at http://127.0.0.1:5250.
 - `make ui-check` clicks through the UI in headless Chromium (Playwright, installed into
   `/opt/tailweave-browser` in the VM on first use) and checks the effect on DNS.
   Screenshots land in `lab/.state/ui/`; look at them after UI changes.
@@ -77,7 +78,7 @@ Keep this list current when finishing or starting a step.
 ## Gotchas
 
 - Lima port forwarding is disabled on purpose: guest tailscaled would collide with a
-  Tailscale client on the Mac (UDP 41641).
+  Tailscale client on the host (UDP 41641).
 - The lab docker network uses `gateway_mode_ipv4: nat-unprotected`; without it
   Docker >= 28 drops traffic from the namespaces to container IPs.
 - Headscale CLI returns `null` instead of `[]` for empty lists; guard with `(. // [])`.
