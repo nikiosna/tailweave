@@ -1,4 +1,8 @@
-# tailweave developer entry points.
+# tailweave: build and install, plus the developer entry points.
+#
+#   make                 build ./tailweave for this machine (needs Go)
+#   sudo make install    install it with its systemd or launchd service
+#   sudo make uninstall  stop the service and remove both again
 #
 # The lab runs inside a Lima VM on every host; the repository is mounted at the same path,
 # so targets transparently re-run themselves inside the VM. The lab changes routing,
@@ -14,6 +18,16 @@ MAC_TEST_FLAGS ?= -test.v
 NO_VM     ?=
 VERSION   ?= $(shell git describe --always --dirty 2>/dev/null || echo dev)
 
+PREFIX    ?= /usr/local
+DESTDIR   ?=
+OS        := $(shell uname -s)
+BINDIR    := $(DESTDIR)$(PREFIX)/bin
+SYSTEMD_UNIT := $(DESTDIR)/etc/systemd/system/tailweave.service
+LAUNCHD_LABEL := com.github.nikiosna.tailweave
+LAUNCHD_PLIST := $(DESTDIR)/Library/LaunchDaemons/$(LAUNCHD_LABEL).plist
+
+.DEFAULT_GOAL := all
+
 ifeq ($(NO_VM),)
 IN_LAB := limactl shell --workdir $(CURDIR) $(VM) --
 SH     := $(IN_LAB) bash -lc
@@ -28,12 +42,59 @@ LAB := $(IN_LAB) lab/scripts
 MAC := limactl shell --workdir $(CURDIR) $(MAC_VM)
 DARWIN_GO := GOOS=darwin GOARCH=arm64 CGO_ENABLED=0 go
 
-.PHONY: help vm-up vm-down vm-destroy sh mac-vm-up mac-vm-down mac-vm-destroy mac-sh mac-build \
+.PHONY: all install uninstall clean help vm-up vm-down vm-destroy sh mac-vm-up mac-vm-down mac-vm-destroy mac-sh mac-build \
 	mac-run mac-login mac-test-lab lab-up lab-status lab-reset playground-up playground-down \
-	run lab-login ui ui-check ui-tunnel build test test-lab lint fmt
+	run lab-login ui ui-check ui-tunnel lab-build test test-lab lint fmt
 
 help: ## Show targets
 	@grep -hE '^[a-z-]+:.*## ' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  %-16s %s\n", $$1, $$2}'
+
+# --- Build and install -----------------------------------------------------
+
+# These run directly on this machine, never in the VM.
+all: ## Build ./tailweave for this machine (then: sudo make install)
+	@command -v go >/dev/null || { echo "Go is missing: install Go $$(sed -n 's/^go //p' go.mod) or newer" >&2; exit 1; }
+	CGO_ENABLED=0 go build -ldflags "-X main.version=$(VERSION)" -o tailweave ./cmd/tailweave
+
+# install does not build, so sudo never runs Go and never writes into the checkout.
+install: ## Install ./tailweave (into /usr/local/bin, PREFIX=...) and its systemd/launchd service
+	@test -x tailweave || { echo "./tailweave does not exist yet: run make first" >&2; exit 1; }
+	install -d $(BINDIR)
+	install -m 755 tailweave $(BINDIR)/tailweave
+ifeq ($(OS),Darwin)
+	install -d $(dir $(LAUNCHD_PLIST))
+	sed 's|/usr/local/bin/tailweave|$(PREFIX)/bin/tailweave|' contrib/launchd/$(LAUNCHD_LABEL).plist > $(LAUNCHD_PLIST)
+	chmod 644 $(LAUNCHD_PLIST)
+	@echo; echo "Installed. Start the service (and at every boot):"
+	@echo "  sudo launchctl bootstrap system $(LAUNCHD_PLIST:$(DESTDIR)%=%)"
+	@echo "Logs: /var/log/tailweave.log. Then add a tailnet: sudo tailweave login <name>"
+else
+	install -d $(dir $(SYSTEMD_UNIT))
+	sed 's|/usr/local/bin/tailweave|$(PREFIX)/bin/tailweave|' contrib/systemd/tailweave.service > $(SYSTEMD_UNIT)
+	chmod 644 $(SYSTEMD_UNIT)
+	@if [ -z "$(DESTDIR)" ] && command -v systemctl >/dev/null; then systemctl daemon-reload; fi
+	@echo; echo "Installed. Start the service (and at every boot):"
+	@echo "  sudo systemctl enable --now tailweave"
+	@echo "Logs: journalctl -u tailweave -f. Then add a tailnet: sudo tailweave login <name>"
+endif
+
+# Stopping the service makes tailweave remove its routes and DNS settings. The state
+# (tailnets and their Tailscale keys) stays.
+uninstall: ## Stop the service and remove what make install installed (keeps the state)
+ifeq ($(OS),Darwin)
+	[ -n "$(DESTDIR)" ] || launchctl bootout system/$(LAUNCHD_LABEL) 2>/dev/null || true
+	rm -f $(LAUNCHD_PLIST)
+	@echo "State kept in /Library/Application Support/tailweave"
+else
+	[ -n "$(DESTDIR)" ] || systemctl disable --now tailweave 2>/dev/null || true
+	rm -f $(SYSTEMD_UNIT)
+	[ -n "$(DESTDIR)" ] || systemctl daemon-reload 2>/dev/null || true
+	@echo "State kept in /var/lib/tailweave"
+endif
+	rm -f $(BINDIR)/tailweave
+
+clean: ## Remove build output
+	rm -rf tailweave bin
 
 # --- VM --------------------------------------------------------------------
 
@@ -109,13 +170,13 @@ playground-up: ## Two tailscaled in two netns, one per tailnet (no tailweave)
 playground-down: ## Remove playground namespaces
 	$(LAB)/netns-playground.sh down
 
-run: build ## Run the tailweave daemon (then make lab-login; control it with sudo bin/tailweave ...)
+run: lab-build ## Run the tailweave daemon (then make lab-login; control it with sudo bin/tailweave ...)
 	$(IN_LAB) sudo bin/tailweave run -config lab/tailweave.json
 
-lab-login: build ## Log `make run` into both lab tailnets with their preauth keys
+lab-login: lab-build ## Log `make run` into both lab tailnets with their preauth keys
 	$(LAB)/login.sh
 
-ui: build ## Web UI for `make run` on 127.0.0.1:5250 in the VM
+ui: lab-build ## Web UI for `make run` on 127.0.0.1:5250 in the VM
 	$(IN_LAB) sudo bin/tailweave ui
 
 ui-check: ## Click through the UI in headless Chromium, screenshots in lab/.state/ui
@@ -126,7 +187,7 @@ ui-tunnel: ## Make the UI of `make ui` reachable at http://127.0.0.1:5250 on the
 
 # --- Go --------------------------------------------------------------------
 
-build: ## Build binaries into ./bin (VERSION sets what `tailweave version` prints)
+lab-build: ## Build into ./bin in the VM, for the lab (VERSION sets what `tailweave version` prints)
 	$(SH) 'go build -ldflags "-X main.version=$(VERSION)" -o bin/ ./cmd/...'
 
 test: ## Unit tests

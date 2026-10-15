@@ -12,9 +12,16 @@ them from the command line.
 
 ## Install
 
-Build from source with Go 1.27 and run `sudo tailweave run`; then
-`sudo tailweave login <name>` adds a tailnet. Requirements, service files for systemd
-and launchd, first steps and known limitations: [docs/install.md](docs/install.md).
+With Go 1.27 and make, on Linux or macOS:
+
+```sh
+make && sudo make install
+sudo tailweave run            # or start the service: see docs/install.md
+sudo tailweave login <name>   # in a second terminal: add a tailnet
+```
+
+Requirements, the service, configuration, first steps and known limitations:
+[docs/install.md](docs/install.md).
 
 ## Why
 

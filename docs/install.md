@@ -27,34 +27,41 @@ No other Tailscale client or VPN may use tailweave's address ranges: `100.64.0.0
 `100.100.100.100`. tailweave checks this at startup and refuses to run if they are
 taken. If Tailscale is running, quit it (or run `tailscale down`) first.
 
-## Build from source
+## Build and install
 
-You need Go 1.27.
+You need Go 1.27 (or a newer Go, which fetches 1.27 itself) and make.
 
 ```sh
 git clone https://github.com/Nikiosna/tailweave
 cd tailweave
-CGO_ENABLED=0 go build -ldflags "-X main.version=$(git describe --always --dirty)" \
-	-o tailweave ./cmd/tailweave
+make                  # builds ./tailweave
+sudo make install     # /usr/local/bin/tailweave plus the systemd or launchd service
 ```
 
-`-ldflags "-X main.version=..."` sets what `tailweave version` prints; without it, it
-prints `dev`. For another platform, set `GOOS` and `GOARCH`, e.g. for a Mac:
+`make install` does not start anything. To try tailweave out, `sudo tailweave run` in a
+terminal is enough; Ctrl-C stops it and removes its routes and DNS settings. To keep it
+running, start the service, which also starts at every boot:
+
+| | Start | Logs | Stop |
+| --- | --- | --- | --- |
+| Linux | `sudo systemctl enable --now tailweave` | `journalctl -u tailweave -f` | `sudo systemctl disable --now tailweave` |
+| macOS | `sudo launchctl bootstrap system /Library/LaunchDaemons/com.github.nikiosna.tailweave.plist` | `tail -f /var/log/tailweave.log` | `sudo launchctl bootout system/com.github.nikiosna.tailweave` |
+
+`sudo make uninstall` stops the service and removes the binary and the service file; the
+state (your tailnets) stays in the state directory below. `PREFIX` (default `/usr/local`)
+and `DESTDIR` work as usual.
+
+Without make, build and copy by hand; the service files are in `contrib/`:
 
 ```sh
-GOOS=darwin GOARCH=arm64 CGO_ENABLED=0 go build \
-	-ldflags "-X main.version=$(git describe --always --dirty)" -o tailweave ./cmd/tailweave
-```
-
-Inside this repository, `make build` does the same and puts the binary in `bin/`.
-
-## Install
-
-```sh
+CGO_ENABLED=0 go build -o tailweave ./cmd/tailweave
 sudo install -m 755 tailweave /usr/local/bin/tailweave
 ```
 
-### Configuration (optional)
+For another platform, set `GOOS` and `GOARCH` on the `go build`, e.g.
+`GOOS=darwin GOARCH=arm64` for a Mac.
+
+## Configuration (optional)
 
 tailweave runs without a config file. To change a default, create
 `/etc/tailweave/config.json` with only the fields you need:
@@ -78,31 +85,6 @@ tailweave runs without a config file. To change a default, create
 
 Tailnets are not configured here; you add them with `tailweave login`, and they are
 kept in the state directory.
-
-## Run as a service
-
-To try it out, `sudo tailweave run` in a terminal is enough; Ctrl-C stops it and removes
-its routes and DNS settings. For permanent use, install it as a service.
-
-### Linux (systemd)
-
-```sh
-sudo install -m 644 contrib/systemd/tailweave.service /etc/systemd/system/
-sudo systemctl daemon-reload
-sudo systemctl enable --now tailweave
-journalctl -u tailweave -f          # logs
-```
-
-### macOS (launchd)
-
-```sh
-sudo install -m 644 -o root -g wheel contrib/launchd/com.github.nikiosna.tailweave.plist \
-	/Library/LaunchDaemons/
-sudo launchctl bootstrap system /Library/LaunchDaemons/com.github.nikiosna.tailweave.plist
-tail -f /var/log/tailweave.log      # logs
-```
-
-Stop it with `sudo launchctl bootout system/com.github.nikiosna.tailweave`.
 
 ## First steps
 

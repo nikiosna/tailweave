@@ -86,7 +86,9 @@ Keep this list current when finishing or starting a step.
   `bin/darwin/tailweave` and the lab test binary in the Linux VM.
 - Ad-hoc commands in the VM: `limactl shell --workdir $PWD tailweave -- <cmd>`
   (use `bash -lc '...'` when Go is needed; PATH comes from /etc/profile.d/go.sh).
-- `make help` lists all targets.
+- `make help` lists all targets. `make` and `make install`/`uninstall` are for users:
+  they build and install natively on the host, never in the VM. The lab uses
+  `make lab-build` (into `bin/`, in the VM); `make run` etc. call it.
 
 ### Lab
 
