@@ -48,7 +48,7 @@ func TestStatus(t *testing.T) {
 		t.Fatalf("tailnet = %+v", tn)
 	}
 	p := tn.Peers[0]
-	if p.ID != "2" || p.DNSName != "peer-b2.b.lab." || p.IPv4() != netip.MustParseAddr("100.64.0.2") || !p.Online {
+	if p.ID != "2" || p.Name != "peer-b2" || p.DNSName != "peer-b2.b.lab." || p.IPv4() != netip.MustParseAddr("100.64.0.2") || !p.Online {
 		t.Errorf("peer = %+v", p)
 	}
 }
@@ -58,5 +58,16 @@ func TestNeedsLogin(t *testing.T) {
 		Self: &node{HostName: "dut-a"}})
 	if s.Running() || s.AuthURL != "http://hs/register/x" || s.Tailnet.Name != "" {
 		t.Errorf("status = %+v", s)
+	}
+}
+
+func TestMachineName(t *testing.T) {
+	for _, c := range []struct{ host, dns, want string }{
+		{"mbp.local", "mbp-tailweave.tailcfeec.ts.net.", "mbp-tailweave"},
+		{"dut-a", "", "dut-a"},
+	} {
+		if got := machineName(&node{HostName: c.host, DNSName: c.dns}); got != c.want {
+			t.Errorf("machineName(%q, %q) = %q, want %q", c.host, c.dns, got, c.want)
+		}
 	}
 }

@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"net/netip"
 	"net/url"
+	"strings"
 	"time"
 
 	"github.com/Nikiosna/tailweave/internal/weave"
@@ -122,5 +123,15 @@ func peerAPIPort(n *node, ip netip.Addr) uint16 {
 }
 
 func peer(n *node) weave.Peer {
-	return weave.Peer{ID: n.ID, Name: n.HostName, DNSName: n.DNSName, IPs: n.TailscaleIPs, Online: n.Online}
+	return weave.Peer{ID: n.ID, Name: machineName(n), DNSName: n.DNSName, IPs: n.TailscaleIPs, Online: n.Online}
+}
+
+// machineName is the name the tailnet knows n by, like `tailscale status` shows it: the
+// first label of its MagicDNS name, which follows a rename in the admin console. The
+// host name is only what the device reports about itself.
+func machineName(n *node) string {
+	if name, _, _ := strings.Cut(n.DNSName, "."); name != "" {
+		return name
+	}
+	return n.HostName
 }
