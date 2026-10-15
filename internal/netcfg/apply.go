@@ -35,12 +35,10 @@ var dockerRules = [][]string{
 	{"-o", VethPrefix + "+", "-m", "conntrack", "--ctstate", "RELATED,ESTABLISHED", "-j", "ACCEPT"},
 }
 
-// Setup removes leftovers of an earlier run and creates the static parts: the ip rule,
-// IP forwarding and NAT for the namespaces, and the DNS link.
+// Setup creates the static parts: the ip rule, IP forwarding and NAT for the namespaces,
+// and the DNS link. Leftovers of an earlier run must have been removed with Teardown.
 func (h *Host) Setup() error {
-	h.Teardown()
-	// iif lo matches locally generated traffic only; forwarded traffic never sees Table.
-	if err := run("", "ip", "rule", "add", "pref", fmt.Sprint(RulePref), "iif", "lo", "lookup", fmt.Sprint(Table)); err != nil {
+	if err := AddRule(); err != nil {
 		return err
 	}
 	if h.Transit.IsValid() {
@@ -148,11 +146,11 @@ func RegisterDNS(link string, addr netip.Addr, domains []string) error {
 	return run("", "resolvectl", "default-route", link, "false")
 }
 
-// Teardown removes everything tailweave configured. Errors are ignored: parts may not
+// Teardown removes everything tailweave configured, and only that: other programs'
+// rules at other priorities or for other tables stay. Errors are ignored: parts may not
 // exist.
 func (h *Host) Teardown() {
-	for run("", "ip", "rule", "del", "pref", fmt.Sprint(RulePref)) == nil {
-	}
+	DeleteRule()
 	_ = run("", "ip", "route", "flush", "table", fmt.Sprint(Table))
 	for _, ns := range h.Namespaces {
 		_ = run("", "ip", "netns", "exec", ns.Netns, "nft", "delete", "table", "inet", nftTable)
@@ -164,6 +162,24 @@ func (h *Host) Teardown() {
 	}
 	_ = run("", "ip", "link", "del", DNSLink) // resolved forgets the link's settings with it
 	h.routes, h.rules, h.domains = "", nil, nil
+}
+
+// ruleArgs selects tailweave's ip rule. iif lo matches locally generated traffic only;
+// forwarded traffic never sees Table.
+func ruleArgs() []string {
+	return []string{"pref", fmt.Sprint(RulePref), "iif", "lo", "lookup", fmt.Sprint(Table)}
+}
+
+// AddRule adds the ip rule that sends locally generated traffic to Table.
+func AddRule() error {
+	return run("", "ip", append([]string{"rule", "add"}, ruleArgs()...)...)
+}
+
+// DeleteRule deletes tailweave's ip rule, also when it exists more than once. The exact
+// match leaves rules of other programs at the same priority alone.
+func DeleteRule() {
+	for run("", "ip", append([]string{"rule", "del"}, ruleArgs()...)...) == nil {
+	}
 }
 
 func run(stdin, name string, args ...string) error {

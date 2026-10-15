@@ -41,7 +41,22 @@ func assertHostClean(t *testing.T) {
 	if out, _ := labtest.Output("sudo", "-n", "iptables", "-S", "DOCKER-USER"); strings.Contains(out, "twh") {
 		t.Errorf("DOCKER-USER rules left:\n%s", out)
 	}
-	if out := labtest.Run(t, "ip", "rule"); strings.Contains(out, "5250") {
+	if out := labtest.Run(t, "ip", "rule"); strings.Contains(out, "5180") {
 		t.Errorf("ip rule left:\n%s", out)
 	}
+}
+
+// tailscaleRules returns tailscaled's ip rules (priorities 5210-5270).
+func tailscaleRules(t *testing.T) string {
+	t.Helper()
+	var rules []string
+	for _, l := range strings.Split(labtest.Run(t, "ip", "rule"), "\n") {
+		if p, _, ok := strings.Cut(l, ":"); ok && p >= "5210" && p <= "5270" && len(p) == 4 {
+			rules = append(rules, l)
+		}
+	}
+	if len(rules) == 0 {
+		t.Error("no ip rules of tailscaled")
+	}
+	return strings.Join(rules, "\n")
 }

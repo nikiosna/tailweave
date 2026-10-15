@@ -45,7 +45,7 @@ func TestWeave(t *testing.T) {
 			{"peer-b1." + domB, "peer-b1"},
 			{"peer-b2", "peer-b2"}, // search domain
 		} {
-			if got := curl(t, tc.host); got != tc.want {
+			if got := waitCurl(t, tc.host, tc.want); got != tc.want {
 				t.Errorf("curl %s = %q, want %q", tc.host, got, tc.want)
 			}
 		}
@@ -56,21 +56,21 @@ func TestWeave(t *testing.T) {
 
 	t.Run("ips", func(t *testing.T) {
 		a1 := labtest.NodeIP(t, labtest.TailnetA, "peer-a1")
-		if got := curl(t, a1.String()); got != "peer-a1" {
+		if got := waitCurl(t, a1.String(), "peer-a1"); got != "peer-a1" {
 			t.Errorf("curl %s = %q, want peer-a1 (tailnet a keeps colliding IPs)", a1, got)
 		}
 		b1 := device(st, "b", "peer-b1")
 		if b1 == nil || b1.Mapping == nil || !b1.Mapping.Auto {
 			t.Fatalf("peer-b1 not auto-mapped: %+v", b1)
 		}
-		if got := curl(t, b1.RoutedIP.String()); got != "peer-b1" {
+		if got := waitCurl(t, b1.RoutedIP.String(), "peer-b1"); got != "peer-b1" {
 			t.Errorf("curl %s = %q, want peer-b1", b1.RoutedIP, got)
 		}
 		b3 := device(st, "b", "peer-b3")
 		if b3.RoutedIP != b3.RealIP {
 			t.Fatalf("peer-b3 should keep its real IP: %+v", b3)
 		}
-		if got := curl(t, b3.RealIP.String()); got != "peer-b3" {
+		if got := waitCurl(t, b3.RealIP.String(), "peer-b3"); got != "peer-b3" {
 			t.Errorf("curl %s = %q, want peer-b3", b3.RealIP, got)
 		}
 	})
@@ -212,8 +212,42 @@ func TestLoginSSO(t *testing.T) {
 		t.Fatalf("tailweave login: %v\n%s", err, out.String())
 	}
 	waitState(t, tw, func(s daemon.State) bool { return device(s, "a", "peer-a1") != nil })
-	if got := curl(t, "peer-a1.a.lab"); got != "peer-a1" {
+	if got := waitCurl(t, "peer-a1.a.lab", "peer-a1"); got != "peer-a1" {
 		t.Errorf("curl peer-a1 after SSO login = %q", got)
+	}
+}
+
+// TestForeignTailscale runs the official Tailscale client on the host: tailweave must
+// refuse to start next to it, without breaking it, and start once it is gone.
+func TestForeignTailscale(t *testing.T) {
+	labtest.RequireLab(t)
+	ts := labtest.StartHostTailscale(t, labtest.TailnetA)
+	before := tailscaleRules(t)
+
+	out := runTailweaveExpectFail(t, t.TempDir())
+	t.Logf("tailweave refused to start:\n%s", out)
+	if !strings.Contains(out, "Tailscale is running") {
+		t.Errorf("tailweave's message does not mention Tailscale:\n%s", out)
+	}
+
+	a1 := labtest.NodeIP(t, labtest.TailnetA, "peer-a1")
+	if out, err := ts.Output("ping", "--c=5", "--until-direct=false", a1.String()); err != nil {
+		t.Errorf("tailscale ping %s after tailweave gave up: %v\n%s", a1, err, out)
+	}
+	if got := curl(t, a1.String()); got != "peer-a1" {
+		t.Errorf("curl %s through the host's Tailscale = %q, want peer-a1", a1, got)
+	}
+	if after := tailscaleRules(t); after != before {
+		t.Errorf("Tailscale's ip rules changed:\nbefore:\n%s\nafter:\n%s", before, after)
+	}
+
+	ts.Stop(t)
+	tw := startTailweave(t, t.TempDir())
+	tw.login(t, labtest.TailnetA)
+	waitState(t, tw, func(s daemon.State) bool { return device(s, "a", "peer-a1") != nil })
+	flushDNS(t) // macOS may have cached a negative answer while Tailscale was up
+	if got := waitCurl(t, "peer-a1.a.lab", "peer-a1"); got != "peer-a1" {
+		t.Errorf("curl peer-a1 through tailweave after Tailscale stopped = %q", got)
 	}
 }
 
@@ -262,21 +296,7 @@ func must(t *testing.T) func(daemon.State, error) daemon.State {
 // prebuilt binary (default: built from the repository, which needs Go).
 func startTailweave(t *testing.T, dir string) tailweave {
 	t.Helper()
-	bin := os.Getenv("TAILWEAVE_BIN")
-	if bin == "" {
-		bin = filepath.Join(dir, "tailweave")
-		labtest.Run(t, "go", "build", "-o", bin, "./cmd/tailweave")
-	}
-	sock := filepath.Join(dir, "tailweave.sock")
-	conf := map[string]any{"stateDir": filepath.Join(dir, "state"), "socket": sock}
-	if b := os.Getenv("TAILWEAVE_BACKEND"); b != "" {
-		conf["backend"] = b
-	}
-	cfg, _ := json.Marshal(conf)
-	confPath := filepath.Join(dir, "config.json")
-	if err := os.WriteFile(confPath, cfg, 0o644); err != nil {
-		t.Fatal(err)
-	}
+	bin, confPath, sock := setupTailweave(t, dir)
 	t.Cleanup(func() {
 		// root's files would make the removal of the test's temp dir fail.
 		_, _ = labtest.Output("sudo", "-n", "rm", "-rf", filepath.Join(dir, "state"))
@@ -321,6 +341,55 @@ func startTailweave(t *testing.T, dir string) tailweave {
 	return tailweave{Client: client.New(sock), bin: bin, dir: dir, stop: stop}
 }
 
+// setupTailweave builds tailweave unless $TAILWEAVE_BIN names a binary and writes a
+// config with the state in dir. It returns the binary, the config and the API socket.
+func setupTailweave(t *testing.T, dir string) (bin, confPath, sock string) {
+	t.Helper()
+	bin = os.Getenv("TAILWEAVE_BIN")
+	if bin == "" {
+		bin = filepath.Join(dir, "tailweave")
+		labtest.Run(t, "go", "build", "-o", bin, "./cmd/tailweave")
+	}
+	sock = filepath.Join(dir, "tailweave.sock")
+	conf := map[string]any{"stateDir": filepath.Join(dir, "state"), "socket": sock}
+	if b := os.Getenv("TAILWEAVE_BACKEND"); b != "" {
+		conf["backend"] = b
+	}
+	cfg, _ := json.Marshal(conf)
+	confPath = filepath.Join(dir, "config.json")
+	if err := os.WriteFile(confPath, cfg, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return bin, confPath, sock
+}
+
+// runTailweaveExpectFail runs the daemon with its state in dir, expects it to give up
+// within 30 seconds and returns what it printed.
+func runTailweaveExpectFail(t *testing.T, dir string) string {
+	t.Helper()
+	bin, confPath, _ := setupTailweave(t, dir)
+	t.Cleanup(func() { _, _ = labtest.Output("sudo", "-n", "rm", "-rf", filepath.Join(dir, "state")) })
+	var log bytes.Buffer
+	cmd := exec.Command("sudo", "-n", bin, "run", "-config", confPath)
+	cmd.Stdout, cmd.Stderr = &log, &log
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() { done <- cmd.Wait() }()
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatalf("tailweave exited successfully, want a failure:\n%s", log.String())
+		}
+	case <-time.After(30 * time.Second):
+		_ = cmd.Process.Signal(syscall.SIGTERM)
+		<-done
+		t.Fatalf("tailweave still running after 30s, want a failure:\n%s", log.String())
+	}
+	return log.String()
+}
+
 func waitState(t *testing.T, tw tailweave, ok func(daemon.State) bool) daemon.State {
 	t.Helper()
 	var last string
@@ -349,6 +418,19 @@ func curl(t *testing.T, host string) string {
 	t.Helper()
 	out, _ := labtest.Output("curl", "-s", "-m5", "http://"+host+"/")
 	return out
+}
+
+// waitCurl retries curl until it returns want, for up to 20 seconds, and returns the
+// last answer. A peer may take a moment to learn about a node that just logged in.
+func waitCurl(t *testing.T, host, want string) string {
+	t.Helper()
+	var got string
+	for end := time.Now().Add(20 * time.Second); time.Now().Before(end); time.Sleep(time.Second) {
+		if got = curl(t, host); got == want {
+			break
+		}
+	}
+	return got
 }
 
 func udp(t *testing.T, host string) string {

@@ -19,11 +19,11 @@ import (
 )
 
 // Table is the host routing table tailweave owns; RulePref is the priority of the ip
-// rule that consults it for locally generated traffic. Both are below Tailscale's own
-// table 52 / pref 5270.
+// rule that consults it for locally generated traffic. tailscaled uses table 52 and
+// prefs 5210-5270; RulePref sits just before them, at a priority no known VPN client uses.
 const (
-	Table    = 5250
-	RulePref = 5250
+	Table    = 5180
+	RulePref = 5180
 	nftTable = "tailweave"
 )
 

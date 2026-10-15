@@ -1,6 +1,10 @@
 package hostnet
 
-import "strings"
+import (
+	"net/netip"
+	"os/exec"
+	"strings"
+)
 
 // TunName is the name tailweave asks for when it creates its TUN device; macOS picks the
 // next free utun.
@@ -10,10 +14,18 @@ const TunName = "utun"
 // merges them into the system's resolver configuration like a VPN's.
 const dnsKey = "State:/Network/Service/tailweave/DNS"
 
+// Cleanup removes what an earlier run left behind: the DNS settings and the lo0 alias.
+// Its routes went away with its utun.
+func Cleanup(dns netip.Addr) {
+	_ = run("remove "+dnsKey+"\n", "scutil")
+	if dns.IsValid() {
+		_ = run("", "ifconfig", "lo0", "-alias", dns.String())
+	}
+}
+
 // Setup gives the utun its address, routes the tailnet ranges into it and puts the DNS
 // service address on lo0.
 func (h *Host) Setup() error {
-	h.Teardown()
 	ip := h.HostIP.String()
 	if err := run("", "ifconfig", h.Tun, "inet", ip, ip, "netmask", "255.255.255.255", "up"); err != nil {
 		return err
@@ -41,15 +53,29 @@ func (h *Host) setDomains(domains []string) error {
 	return run(b.String(), "scutil")
 }
 
-// Teardown removes the DNS settings, the lo0 alias and the routes; the utun's own
-// address goes away with the device. Errors are ignored: parts may not exist.
+// Teardown removes the DNS settings, the lo0 alias and the routes into the utun; the
+// utun's own address goes away with the device. Routes of other programs stay. Errors are
+// ignored: parts may not exist.
 func (h *Host) Teardown() {
-	_ = run("remove "+dnsKey+"\n", "scutil")
-	if h.DNS.IsValid() {
-		_ = run("", "ifconfig", "lo0", "-alias", h.DNS.String())
-	}
+	Cleanup(h.DNS)
 	for _, p := range h.Routes {
-		_ = run("", "route", "-q", "-n", "delete", "-inet", "-net", p.Masked().String())
+		if h.routedHere(p) {
+			_ = run("", "route", "-q", "-n", "delete", "-inet", "-net", p.Masked().String())
+		}
 	}
 	h.domains, h.set = nil, false
+}
+
+// routedHere reports whether the route the kernel picks for p leads into the utun.
+func (h *Host) routedHere(p netip.Prefix) bool {
+	out, err := exec.Command("route", "-n", "get", "-inet", "-net", p.Masked().String()).Output()
+	if err != nil {
+		return false
+	}
+	for _, l := range strings.Split(string(out), "\n") {
+		if v, ok := strings.CutPrefix(strings.TrimSpace(l), "interface:"); ok {
+			return strings.TrimSpace(v) == h.Tun
+		}
+	}
+	return false
 }

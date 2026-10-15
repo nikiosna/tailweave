@@ -44,6 +44,9 @@ type Backend struct {
 	insts map[string]*Instance
 }
 
+// Cleanup removes what an earlier run left on the host, if it did not exit cleanly.
+func (b *Backend) Cleanup() { hostnet.Cleanup(b.DNS) }
+
 // Setup creates the TUN, configures the host and starts the router.
 func (b *Backend) Setup() error {
 	// Tailscale's engines would upload their logs to Tailscale Inc. otherwise.

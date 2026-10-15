@@ -7,16 +7,24 @@ package daemon
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net"
 	"net/http"
+	"net/netip"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
+	"strconv"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/Nikiosna/tailweave/internal/dns"
+	"github.com/Nikiosna/tailweave/internal/instance"
+	"github.com/Nikiosna/tailweave/internal/netcfg"
+	"github.com/Nikiosna/tailweave/internal/preflight"
 	"github.com/Nikiosna/tailweave/internal/tailnet"
 	"github.com/Nikiosna/tailweave/internal/weave"
 )
@@ -74,6 +82,12 @@ func New(cfg Config) (*Daemon, error) {
 // host in line with them until ctx is done. Everything is removed again on return,
 // except the tailscaled state, so the tailnets stay logged in.
 func (d *Daemon) Run(ctx context.Context) error {
+	// Remove what a crashed run left, then make sure nothing else uses what tailweave is
+	// about to set up: another VPN client and tailweave would break each other.
+	d.be.Cleanup()
+	if err := preflight.Run(d.claims()); err != nil {
+		return err
+	}
 	if err := d.be.Setup(); err != nil {
 		d.be.Teardown()
 		return err
@@ -81,6 +95,9 @@ func (d *Daemon) Run(ctx context.Context) error {
 	defer d.be.Teardown()
 
 	if err := d.dns.Start(net.JoinHostPort(d.cfg.DNS.String(), "53")); err != nil {
+		if errors.Is(err, syscall.EADDRINUSE) {
+			return fmt.Errorf("another program already serves DNS on %s:53 (another VPN client or DNS proxy?); stop it before starting tailweave: %w", d.cfg.DNS, err)
+		}
 		return err
 	}
 	defer d.dns.Close()
@@ -119,6 +136,22 @@ func (d *Daemon) Run(ctx context.Context) error {
 		case <-t.C:
 		}
 	}
+}
+
+// claims returns the host resources tailweave is about to use.
+func (d *Daemon) claims() preflight.Claims {
+	c := preflight.Claims{
+		Ranges:        []netip.Prefix{netcfg.CGNAT, d.cfg.Pool, d.cfg.Transit},
+		DNS:           d.cfg.DNS,
+		OwnInterfaces: []string{netcfg.VethPrefix, netcfg.DNSLink},
+	}
+	if runtime.GOOS == "linux" {
+		c.RulePref, c.Table = netcfg.RulePref, strconv.Itoa(netcfg.Table)
+	}
+	if host, _, err := instance.Addrs(d.cfg.Transit, 0); err == nil {
+		c.OwnAddr = host
+	}
+	return c
 }
 
 // listenUnix listens on a Unix socket only root can use, replacing a stale one.

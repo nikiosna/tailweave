@@ -26,12 +26,12 @@ func TestHostRoutes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := `route flush table 5250
-route replace unreachable 100.64.0.0/10 table 5250
-route replace unreachable 198.18.0.0/15 table 5250
-route replace 100.64.0.1/32 via 10.200.1.2 table 5250
-route replace 100.64.0.2/32 via 10.200.2.2 table 5250
-route replace 198.18.0.1/32 via 10.200.2.2 table 5250
+	want := `route flush table 5180
+route replace unreachable 100.64.0.0/10 table 5180
+route replace unreachable 198.18.0.0/15 table 5180
+route replace 100.64.0.1/32 via 10.200.1.2 table 5180
+route replace 100.64.0.2/32 via 10.200.2.2 table 5180
+route replace 198.18.0.1/32 via 10.200.2.2 table 5180
 `
 	if got != want {
 		t.Errorf("got:\n%s\nwant:\n%s", got, want)

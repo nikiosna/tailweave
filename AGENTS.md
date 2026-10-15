@@ -16,7 +16,7 @@ no personal paths. Commit locally only; pushing is done by the maintainer.
      peer-b1 from `tw-b` over TCP, UDP and ICMP; overlapping subnet routes
      (10.99.0.1) also resolve per namespace (`TestPlaygroundIsolation`)
    - [x] Merged address space (`internal/weave`): every peer keeps its real IP and is
-     routed from the host into its tailnet's namespace (table 5250, masquerade per netns).
+     routed from the host into its tailnet's namespace (table 5180, masquerade per netns).
      Colliding IPs are remapped automatically (tailnet listed first keeps the IP, others
      get 198.18.0.0/15 addresses, DNAT in the netns) or, with auto-mapping off, left
      unrouted until the user maps a device by hand (`TestWeave`)
@@ -36,6 +36,11 @@ no personal paths. Commit locally only; pushing is done by the maintainer.
      server's login URL and waits; tested against Dex in the lab (`TestLoginSSO`)
    - [x] Isolation: only the host reaches the tailnets; no forwarding from the LAN, between
      namespaces, or from a tailnet out of its namespace (`TestIsolation`)
+   - [x] Foreign VPNs: before touching the host, `internal/preflight` refuses to start
+     when another program (Tailscale, a VPN, a fake-ip proxy) routes or holds addresses in
+     CGNAT, the pool, transit or the DNS address, or uses tailweave's ip rule priority or
+     table, with a hint to quit Tailscale if it is running; teardown removes only
+     tailweave's own rule and routes (`TestForeignTailscale`, official client on the host)
    - [ ] Inbound: peers connecting to services on the host
    - [ ] Remaining conflicts: subnet routes (same merge model), exit nodes
 3. **macOS version** *(in progress)*
@@ -143,8 +148,9 @@ Keep this list current when finishing or starting a step.
 - Pass auth keys to `tailscale up` as `--auth-key=file:...` so they don't show up in `ps`.
 - Do not name host interfaces `tw-*` other than the playground veths (iptables match `tw-+`).
   tailweave's DNS link is `tailweave0` and its veths are `twh<i>` for that reason.
-- tailweave owns routing table 5250 (ip rule pref 5250, `iif lo`, so only locally
-  generated traffic uses it), nft table `inet tailweave` in each namespace (DNAT, forward
+- tailweave owns routing table 5180 (ip rule pref 5180, `iif lo`, so only locally
+  generated traffic uses it; tailscaled uses table 52 and prefs 5210-5270, so never touch
+  rules by priority alone, delete the exact `pref 5180 iif lo lookup 5180`), nft table `inet tailweave` in each namespace (DNAT, forward
   filter that drops new traffic from the tailnet, masquerade) and nft table `ip tailweave`
   on the host (masquerade for the transit range, forward filter that drops new traffic
   into `twh+`), plus two `twh+` ACCEPT rules in iptables `DOCKER-USER` if that chain exists
@@ -152,11 +158,23 @@ Keep this list current when finishing or starting a step.
   exit; the tailscaled state in `<stateDir>/tailnets/<name>` stays. It also sets the
   host's `net.ipv4.ip_forward=1` and leaves it on. tailscaled's own netfilter rules in
   the namespaces stay on and let the forwarded host traffic through.
+- `tailweave run` first removes its own leftovers of a crashed run (`backend.Cleanup`), then
+  runs `internal/preflight` against the host (Linux: `ip -j route/rule/addr`,
+  `/proc/*/comm`; macOS: `netstat -rn`, `ifconfig`, `ps`). Default routes and /1 halves
+  of full tunnels do not count; `twh*`, `tailweave0` and the interface with the transit
+  host address are tailweave's own. Teardown on macOS deletes a route only if it leads
+  into tailweave's utun.
+- `TestForeignTailscale` runs a real tailscaled in the host namespace
+  (`labtest.StartHostTailscale`: state `/var/lib/tailweave-lab/host`, socket
+  `/var/run/tailweave-lab/host/tailscaled.sock`, port 41700, node `dut-host`). Linux uses
+  the VM's tailscaled; `make mac-build` cross-builds tailscale/tailscaled (version from
+  `go.mod`, via `go install`, so their dependencies stay out of `go.mod`) into
+  `bin/darwin/`, found next to `$TAILWEAVE_BIN` or via `$TAILSCALED_BIN`/`$TAILSCALE_BIN`.
 - Each namespace gets `/etc/netns/<ns>/resolv.conf` with the host's real upstream servers
   (from `/run/systemd/resolve/resolv.conf`), so tailscaled can reach its control server.
 - The tsnet backend owns one TUN (`tailweave0` on Linux, the next free `utun` on macOS)
   with the first address of `transit` (10.201.0.1). Only 100.64.0.0/10 and the pool are
-  routed into it (Linux: table 5250 with `iif lo`); the router drops everything not
+  routed into it (Linux: table 5180 with `iif lo`); the router drops everything not
   from 10.201.0.1, anything for an unrouted IP, and packets from a tailnet that answer
   no flow the host opened. On macOS the DNS address sits on lo0 and the resolver
   settings under `State:/Network/Service/tailweave/DNS` (`scutil`); all of it goes away

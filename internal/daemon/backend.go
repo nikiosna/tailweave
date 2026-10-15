@@ -31,6 +31,7 @@ func defaultBackend() string {
 // backend runs the tailnets' instances and applies plans to the host. The daemon
 // serializes all calls.
 type backend interface {
+	Cleanup() // removes leftovers of an earlier run, and only tailweave's own
 	Setup() error
 	Teardown() // also after a failed Setup
 	Start(e tailnetEntry) (runner, error)
@@ -85,6 +86,7 @@ type netnsBackend struct {
 	host *netcfg.Host
 }
 
+func (b *netnsBackend) Cleanup()                 { b.host.Teardown() }
 func (b *netnsBackend) Setup() error             { return b.host.Setup() }
 func (b *netnsBackend) Teardown()                { b.host.Teardown() }
 func (b *netnsBackend) Apply(p weave.Plan) error { return b.host.Apply(p) }

@@ -4,6 +4,7 @@ package hostnet
 
 import (
 	"errors"
+	"net/netip"
 	"runtime"
 )
 
@@ -12,6 +13,7 @@ const TunName = "tailweave"
 
 var errUnsupported = errors.New("tailweave does not support " + runtime.GOOS + " yet")
 
+func Cleanup(dns netip.Addr)                      {}
 func (h *Host) Setup() error                      { return errUnsupported }
 func (h *Host) setDomains(domains []string) error { return errUnsupported }
 func (h *Host) Teardown()                         {}

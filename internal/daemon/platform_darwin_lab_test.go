@@ -38,3 +38,6 @@ func assertHostClean(t *testing.T) {
 		t.Errorf("routes left:\n%s", out)
 	}
 }
+
+// tailscaleRules has nothing to return: macOS has no policy routing rules.
+func tailscaleRules(t *testing.T) string { return "" }

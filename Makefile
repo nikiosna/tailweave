@@ -72,9 +72,14 @@ mac-vm-destroy: ## Delete the macOS VM
 mac-sh: ## Shell inside the macOS VM, in the repo directory
 	$(MAC)
 
-mac-build: ## Cross-build tailweave and the lab tests for macOS into ./bin/darwin
+# tailscale and tailscaled (the version in go.mod) are for TestForeignTailscale. go install
+# builds them outside this module, so their CLI's dependencies stay out of go.mod.
+mac-build: ## Cross-build tailweave, the lab tests and tailscale(d) for macOS into ./bin/darwin
 	$(SH) '$(DARWIN_GO) build -o bin/darwin/ ./cmd/... && \
-		$(DARWIN_GO) test -c -tags lab -o bin/darwin/daemon.test ./internal/daemon'
+		$(DARWIN_GO) test -c -tags lab -o bin/darwin/daemon.test ./internal/daemon && \
+		v=$$(go list -m -f "{{.Version}}" tailscale.com) && \
+		GOBIN= $(DARWIN_GO) install tailscale.com/cmd/tailscaled@$$v tailscale.com/cmd/tailscale@$$v && \
+		cp "$$(go env GOPATH)"/bin/darwin_arm64/tailscale "$$(go env GOPATH)"/bin/darwin_arm64/tailscaled bin/darwin/'
 
 mac-run: mac-build ## Run the tailweave daemon in the macOS VM (then make mac-login)
 	$(MAC) sudo bin/darwin/tailweave run -config lab/tailweave.json
