@@ -15,7 +15,8 @@ const statusJSON = `{
   "MagicDNSSuffix": "b.lab",
   "CurrentTailnet": {"Name": "172.30.0.11", "MagicDNSSuffix": "b.lab", "MagicDNSEnabled": true},
   "Self": {"ID": "6", "HostName": "dut-b", "DNSName": "dut-b.b.lab.",
-    "TailscaleIPs": ["100.64.0.6", "fd7a:115c:a1e0::6"], "Online": true},
+    "TailscaleIPs": ["100.64.0.6", "fd7a:115c:a1e0::6"], "Online": true,
+    "PeerAPIURL": ["http://100.64.0.6:63847", "http://[fd7a:115c:a1e0::6]:56208"]},
   "Peer": {
     "nodekey:aa": {"ID": "2", "HostName": "peer-b2", "DNSName": "peer-b2.b.lab.",
       "TailscaleIPs": ["100.64.0.2", "fd7a:115c:a1e0::2"], "Online": true, "PrimaryRoutes": null}
@@ -43,7 +44,7 @@ func TestStatus(t *testing.T) {
 		t.Fatal(err)
 	}
 	tn := st.Tailnet
-	if tn.Name != "b" || tn.Domain != "b.lab" || tn.Self.Name != "dut-b" || len(tn.Peers) != 1 {
+	if tn.Name != "b" || tn.Domain != "b.lab" || tn.Self.Name != "dut-b" || tn.PeerAPIPort != 63847 || len(tn.Peers) != 1 {
 		t.Fatalf("tailnet = %+v", tn)
 	}
 	p := tn.Peers[0]

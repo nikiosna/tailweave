@@ -6,7 +6,9 @@
 // Only the host itself reaches the tailnets. The routing table applies to locally
 // generated traffic only, the host forwards nothing new into a namespace (so neither the
 // LAN nor another namespace gets in), and a namespace forwards nothing new that comes
-// from its tailnet (so peers cannot use it as a router).
+// from its tailnet (so peers cannot use it as a router), except connections to the
+// instance's own tailnet IP: those are translated to the host's veth address and so end
+// on the host itself, from the peer's routed IP.
 package netcfg
 
 import (
@@ -38,6 +40,8 @@ type Namespace struct {
 	Tailnet string
 	Netns   string     // network namespace name
 	Gateway netip.Addr // the namespace's address on its veth, as seen from the host
+	HostIP  netip.Addr // the host's address on the veth pair
+	Veth    string     // the namespace's end of the veth pair
 	Tun     string     // tailscaled's TUN interface inside the namespace
 }
 
@@ -67,29 +71,73 @@ func HostRoutes(p weave.Plan, nss []Namespace, blocked []netip.Prefix) (string, 
 
 // NamespaceRules renders an `nft -f` script that atomically replaces tailweave's table in
 // the namespace of ns.
+//
+// Connections from peers to the instance's own tailnet IP go to the host (inbound),
+// except tailscaled's PeerAPI. They arrive there from the peer's routed IP; peers that are
+// not routed on this machine get nothing forwarded.
 func NamespaceRules(p weave.Plan, ns Namespace) string {
+	self := p.Local[ns.Tailnet]
+	var routed []netip.Addr // real IPs of this tailnet's routed peers
 	var b strings.Builder
 	// Declaring the table first makes the delete succeed when it does not exist yet.
 	fmt.Fprintf(&b, "table inet %s\ndelete table inet %s\n", nftTable, nftTable)
 	fmt.Fprintf(&b, "table inet %s {\n", nftTable)
 	b.WriteString("\tchain prerouting {\n\t\ttype nat hook prerouting priority dstnat; policy accept;\n")
 	for _, ip := range sortedIPs(p.Routes) {
-		if t := p.Routes[ip]; t.Tailnet == ns.Tailnet && t.IP != ip {
+		t := p.Routes[ip]
+		if t.Tailnet != ns.Tailnet {
+			continue
+		}
+		routed = append(routed, t.IP)
+		if t.IP != ip {
 			fmt.Fprintf(&b, "\t\tip daddr %s dnat ip to %s\n", ip, t.IP)
 		}
 	}
+	slices.SortFunc(routed, netip.Addr.Compare)
+	inbound := self.IP.IsValid() && len(routed) > 0
+	if inbound {
+		if self.PeerAPIPort != 0 {
+			fmt.Fprintf(&b, "\t\tiifname %q ip daddr %s tcp dport %d accept\n", ns.Tun, self.IP, self.PeerAPIPort)
+		}
+		fmt.Fprintf(&b, "\t\tiifname %q ip daddr %s meta l4proto { tcp, udp, icmp } dnat ip to %s\n",
+			ns.Tun, self.IP, ns.HostIP)
+	}
 	b.WriteString("\t}\n")
-	// Peers only get answers to the host's connections forwarded, nothing of their own.
+	// Peers get answers to the host's connections forwarded and may connect to the host,
+	// nothing else.
 	b.WriteString("\tchain forward {\n\t\ttype filter hook forward priority filter; policy accept;\n")
 	fmt.Fprintf(&b, "\t\tiifname %q ct state established,related accept\n", ns.Tun)
+	if inbound {
+		fmt.Fprintf(&b, "\t\tiifname %q oifname %q ip saddr { %s } ip daddr %s ct status dnat accept\n",
+			ns.Tun, ns.Veth, joinIPs(routed), ns.HostIP)
+	}
 	fmt.Fprintf(&b, "\t\tiifname %q drop\n", ns.Tun)
 	b.WriteString("\t}\n")
-	b.WriteString("\tchain postrouting {\n\t\ttype nat hook postrouting priority srcnat; policy accept;\n")
+	// Before tailscaled's own rules (at srcnat), which would masquerade what it forwards.
+	b.WriteString("\tchain postrouting {\n\t\ttype nat hook postrouting priority srcnat - 1; policy accept;\n")
 	// Traffic from the host leaves with the instance's own tailnet IP; tailscaled's own
 	// traffic already has one.
 	fmt.Fprintf(&b, "\t\toifname %q ip saddr != %s masquerade\n", ns.Tun, CGNAT)
+	// Peers reach the host from the IP they are routed at there.
+	if inbound {
+		var m []string
+		for _, ip := range sortedIPs(p.Routes) {
+			if t := p.Routes[ip]; t.Tailnet == ns.Tailnet {
+				m = append(m, t.IP.String()+" : "+ip.String())
+			}
+		}
+		fmt.Fprintf(&b, "\t\toifname %q ct status dnat snat ip to ip saddr map { %s }\n", ns.Veth, strings.Join(m, ", "))
+	}
 	b.WriteString("\t}\n}\n")
 	return b.String()
+}
+
+func joinIPs(ips []netip.Addr) string {
+	ss := make([]string, len(ips))
+	for i, ip := range ips {
+		ss[i] = ip.String()
+	}
+	return strings.Join(ss, ", ")
 }
 
 // HostRules renders an `nft -f` script that atomically replaces tailweave's table on the

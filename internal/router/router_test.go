@@ -74,6 +74,18 @@ func recv(t *testing.T, d *device) []byte {
 	}
 }
 
+// recvHost waits for a packet the router wrote to the host.
+func recvHost(t *testing.T, l *lab) []byte {
+	t.Helper()
+	select {
+	case p := <-l.toHost:
+		return p
+	case <-time.After(2 * time.Second):
+		t.Fatal("no packet for the host")
+		return nil
+	}
+}
+
 func none(t *testing.T, ch <-chan []byte) {
 	t.Helper()
 	select {
@@ -131,23 +143,56 @@ func TestDropsUnroutedAndForeign(t *testing.T) {
 	none(t, l.b.in)
 }
 
-func TestDropsNewFlowsFromTailnet(t *testing.T) {
+func TestInbound(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		proto byte
+	}{{"tcp", protoTCP}, {"udp", protoUDP}, {"icmp", protoICMP}} {
+		t.Run(tc.name, func(t *testing.T) {
+			l := newLab(t)
+
+			// a's 100.64.0.1 connects to the host and arrives from its own IP.
+			reply(l.a, build(tc.proto, peer, selfA, 50000, 22, false))
+			check(t, recvHost(t, l), tc.proto, peer, hostIP)
+
+			// The host's answer goes back to a.
+			l.send(build(tc.proto, hostIP, peer, 22, 50000, true))
+			check(t, recv(t, l.a), tc.proto, selfA, peer)
+			none(t, l.b.in)
+
+			// b's 100.64.0.1 arrives from the IP it is routed at, and the answer reaches b.
+			reply(l.b, build(tc.proto, peer, selfB, 50000, 22, false))
+			check(t, recvHost(t, l), tc.proto, mapped, hostIP)
+			l.send(build(tc.proto, hostIP, mapped, 22, 50000, true))
+			check(t, recv(t, l.b), tc.proto, selfB, peer)
+			none(t, l.a.in)
+		})
+	}
+}
+
+func TestInboundDrops(t *testing.T) {
 	l := newLab(t)
-	// A peer opening a connection to the host.
-	reply(l.a, build(protoTCP, peer, selfA, 50000, 22, false))
-	reply(l.a, build(protoUDP, peer, selfA, 50000, 53, false))
-	reply(l.a, build(protoICMP, peer, selfA, 7, 7, false))
-	none(t, l.toHost)
-
-	// An answer to a's flow coming from b's peer with the same IP.
-	l.send(build(protoUDP, hostIP, peer, 40000, 8, false))
-	recv(t, l.a)
-	reply(l.b, build(protoUDP, peer, selfB, 8, 40000, true))
-	none(t, l.toHost)
-
 	// A peer that is not routed on this machine.
-	reply(l.a, build(protoUDP, netip.MustParseAddr("100.64.0.9"), selfA, 8, 40000, true))
+	reply(l.a, build(protoTCP, netip.MustParseAddr("100.64.0.9"), selfA, 50000, 22, false))
+	// Packets for anything but the engine's own IP: other peers, the host's or another
+	// tailnet's addresses, the LAN.
+	for _, dst := range []string{"100.64.0.2", "198.18.0.1", "10.201.0.1", "192.168.5.20"} {
+		reply(l.a, build(protoTCP, peer, netip.MustParseAddr(dst), 50000, 22, false))
+		reply(l.a, build(protoUDP, peer, netip.MustParseAddr(dst), 50000, 53, false))
+		reply(l.a, build(protoICMP, peer, netip.MustParseAddr(dst), 0, 0, false))
+	}
+	// Other ICMP messages and other protocols.
+	unreach := build(protoICMP, peer, selfA, 0, 0, false)
+	unreach[20] = 3
+	fixChecksums(unreach)
+	reply(l.a, unreach)
+	gre := build(protoUDP, peer, selfA, 50000, 53, false)
+	gre[9] = 47
+	fixChecksums(gre)
+	reply(l.a, gre)
 	none(t, l.toHost)
+	none(t, l.a.in)
+	none(t, l.b.in)
 }
 
 func TestRemoveTailnet(t *testing.T) {

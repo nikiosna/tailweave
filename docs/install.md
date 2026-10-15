@@ -133,9 +133,11 @@ Devices are reachable by name (via tailweave's DNS service) and by IP. When a de
 IP also exists in a tailnet listed earlier, it gets an address from `198.18.0.0/15`;
 `tailweave status` shows which one.
 
-Peers can reach services on this machine like with Tailscale: each tailnet's ACLs decide
-who gets in. A remapped device shows up with its routed address (e.g. `198.18.0.1`).
-The tailnets never reach each other or your LAN through tailweave.
+Peers can reach services on this machine like with Tailscale (TCP, UDP and ping): each
+tailnet's ACLs decide who gets in, and the host's firewall applies as usual. A remapped
+device shows up with its routed address (e.g. `198.18.0.1`); a device whose IP collision
+is unresolved does not get in. The tailnets never reach each other or your LAN through
+tailweave.
 
 `sudo tailweave logout <tailnet>` logs out and keeps the tailnet,
 `sudo tailweave remove <tailnet>` forgets it.

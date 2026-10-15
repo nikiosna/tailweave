@@ -17,7 +17,7 @@ func peer(id, name, domain, addr string) Peer {
 // lab mirrors the base lab: both tailnets hand out the same addresses.
 func lab() []Tailnet {
 	return []Tailnet{
-		{Name: "a", Domain: "a.lab", Self: peer("9", "dut-a", "a.lab", "100.64.0.3"), Peers: []Peer{
+		{Name: "a", Domain: "a.lab", Self: peer("9", "dut-a", "a.lab", "100.64.0.3"), PeerAPIPort: 4242, Peers: []Peer{
 			peer("1", "peer-a1", "a.lab", "100.64.0.1"),
 			peer("2", "peer-a2", "a.lab", "100.64.0.2"),
 		}},
@@ -64,6 +64,12 @@ func TestUniquePeerRouted(t *testing.T) {
 	}
 	if !slices.Equal(p.Domains, []string{"a.lab", "b.lab"}) {
 		t.Errorf("domains = %v", p.Domains)
+	}
+	if got := p.Local["a"]; got != (Local{ip("100.64.0.3"), 4242}) {
+		t.Errorf("local a = %v", got)
+	}
+	if got := p.Local["b"]; got != (Local{IP: ip("100.64.0.4")}) {
+		t.Errorf("local b = %v", got)
 	}
 }
 

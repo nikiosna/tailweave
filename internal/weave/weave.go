@@ -39,10 +39,11 @@ func (p Peer) IPv4() netip.Addr {
 
 // Tailnet is the current view of one tailnet, as seen by its instance on this machine.
 type Tailnet struct {
-	Name   string // tailweave's name for it, e.g. "a"
-	Domain string // MagicDNS suffix, e.g. "a.lab"; empty if MagicDNS is off
-	Self   Peer
-	Peers  []Peer
+	Name        string // tailweave's name for it, e.g. "a"
+	Domain      string // MagicDNS suffix, e.g. "a.lab"; empty if MagicDNS is off
+	Self        Peer
+	PeerAPIPort uint16 // port of the instance's own PeerAPI on its IP; 0 if unknown
+	Peers       []Peer
 }
 
 // Mapping gives a device an IP on this machine other than its real tailnet IP.
@@ -102,9 +103,16 @@ type Conflict struct {
 	Message  string      `json:"message"`
 }
 
+// Local is this machine's own address in a tailnet.
+type Local struct {
+	IP          netip.Addr // the instance's tailnet IPv4
+	PeerAPIPort uint16     // see Tailnet
+}
+
 // Plan is the desired state for this machine.
 type Plan struct {
 	Routes    map[netip.Addr]Target // IP on this machine -> tailnet and real IP
+	Local     map[string]Local      // tailnet -> this machine's address there
 	Names     map[string]netip.Addr // lowercase FQDN with trailing dot -> routed IP
 	Domains   []string              // MagicDNS suffixes of all tailnets, deduplicated
 	Devices   []Device              // all peers, in tailnet priority order and by IP
@@ -120,12 +128,14 @@ type peerKey struct{ tailnet, id string }
 // tailnet listed first keeps the IP or the name.
 func Compute(tailnets []Tailnet, mappings []Mapping, opt Options) Plan {
 	real := map[netip.Addr]bool{}
-	p := Plan{Routes: map[netip.Addr]Target{}, Names: map[string]netip.Addr{}, real: real}
+	p := Plan{Routes: map[netip.Addr]Target{}, Local: map[string]Local{},
+		Names: map[string]netip.Addr{}, real: real}
 
 	peers := map[peerKey]Peer{}
 	for _, tn := range tailnets {
 		if a := tn.Self.IPv4(); a.IsValid() {
 			real[a] = true
+			p.Local[tn.Name] = Local{IP: a, PeerAPIPort: tn.PeerAPIPort}
 		}
 		for _, pe := range tn.Peers {
 			if a := pe.IPv4(); a.IsValid() {

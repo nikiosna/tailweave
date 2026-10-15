@@ -6,9 +6,14 @@
 // at on this machine to its real tailnet IP, and the source from the host's TUN address
 // to the engine's own tailnet IP. Answers get the reverse treatment.
 //
-// The address translation is 1:1 and needs no state. Flows are tracked only to keep
-// tailnets out: a packet from a tailnet reaches the host only when it answers a
-// connection the host opened, and never another tailnet.
+// Peers reach the host too, like with Tailscale: a packet a tailnet sends to its engine's
+// own IP goes to the host's TUN address, from the IP the peer is routed at on this
+// machine. Which peers may connect to which ports is up to the tailnet's ACLs, which the
+// engine enforces. Nothing else from a tailnet gets through: neither packets for other
+// addresses nor packets from peers that are not routed, so no tailnet reaches another one
+// or anything beyond the host.
+//
+// The address translation is 1:1 and needs no state.
 package router
 
 import (
@@ -18,12 +23,12 @@ import (
 	"os"
 	"sync"
 	"sync/atomic"
-	"time"
 
 	"github.com/Nikiosna/tailweave/internal/weave"
 	"github.com/tailscale/wireguard-go/tun"
 	"tailscale.com/net/packet"
 	"tailscale.com/net/packet/checksum"
+	"tailscale.com/types/ipproto"
 )
 
 // headroom is the space kept in front of packets written to the host TUN; Linux TUNs with
@@ -34,7 +39,6 @@ const headroom = 16
 type Router struct {
 	host   tun.Device
 	hostIP netip.Addr
-	flows  *flows
 
 	writeMu sync.Mutex // serializes writes to host
 
@@ -66,7 +70,7 @@ type target struct {
 // New returns a router for the host TUN whose address on the host is hostIP. Call Run to
 // start moving packets.
 func New(host tun.Device, hostIP netip.Addr) *Router {
-	r := &Router{host: host, hostIP: hostIP, flows: newFlows(), ports: map[string]*port{}}
+	r := &Router{host: host, hostIP: hostIP, ports: map[string]*port{}}
 	r.rebuild()
 	return r
 }
@@ -86,20 +90,19 @@ func (r *Router) AddTailnet(name string) tun.Device {
 	return p.dev
 }
 
-// RemoveTailnet detaches a tailnet and forgets its flows.
+// RemoveTailnet detaches a tailnet.
 func (r *Router) RemoveTailnet(name string) {
 	r.mu.Lock()
+	defer r.mu.Unlock()
 	if p := r.ports[name]; p != nil {
 		p.dev.Close()
 		delete(r.ports, name)
 		r.rebuildLocked()
 	}
-	r.mu.Unlock()
-	r.flows.expire(name)
 }
 
 // SetSelf records a tailnet's own IPv4 address, the source of everything the host sends
-// into it.
+// into it and the only destination the host receives packets for from it.
 func (r *Router) SetSelf(name string, ip netip.Addr) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -154,8 +157,6 @@ func (r *Router) Run() error {
 	for i := range bufs {
 		bufs[i] = make([]byte, headroom+MTU)
 	}
-	gc := time.NewTicker(time.Minute)
-	defer gc.Stop()
 	var q packet.Parsed
 	for {
 		n, err := r.host.Read(bufs, sizes, headroom)
@@ -170,11 +171,6 @@ func (r *Router) Run() error {
 		}
 		for i := range n {
 			r.fromHost(&q, bufs[i][headroom:headroom+sizes[i]])
-		}
-		select {
-		case <-gc.C:
-			r.flows.expire("")
-		default:
 		}
 	}
 }
@@ -196,18 +192,16 @@ func (r *Router) fromHost(q *packet.Parsed, pkt []byte) {
 	q.Decode(cp)
 	checksum.UpdateDstAddr(q, tg.real)
 	checksum.UpdateSrcAddr(q, tg.port.self)
-	if k, ok := outKey(tg.port.name, q); ok {
-		r.flows.add(k)
-	}
 	tg.port.dev.queue(cp)
 }
 
-// fromTailnet routes a packet a tailnet's engine sent to the host. It rewrites pkt in
-// place.
+// fromTailnet routes a packet a tailnet's engine sent to the host: answers to the host's
+// connections and connections of the tailnet's peers to the host alike. It rewrites pkt
+// in place.
 func (r *Router) fromTailnet(p *port, pkt []byte) {
 	var q packet.Parsed
 	q.Decode(pkt)
-	if q.IPVersion != 4 {
+	if q.IPVersion != 4 || !deliverable(&q) {
 		return
 	}
 	t := r.tab.Load()
@@ -217,10 +211,6 @@ func (r *Router) fromTailnet(p *port, pkt []byte) {
 	}
 	routed, ok := t.in[p.name][q.Src.Addr()]
 	if !ok {
-		return
-	}
-	k, ok := inKey(p.name, &q)
-	if !ok || !r.flows.allowed(k) {
 		return
 	}
 	checksum.UpdateSrcAddr(&q, routed)
@@ -234,4 +224,17 @@ func (r *Router) fromTailnet(p *port, pkt []byte) {
 	if err != nil && !errors.Is(err, os.ErrClosed) {
 		slog.Debug("router: write to host", "err", err)
 	}
+}
+
+// deliverable reports whether the host takes a packet of q's kind from a tailnet: TCP,
+// UDP and ICMP echo. Other ICMP messages would need their embedded header translated as
+// well; other protocols are not supported.
+func deliverable(q *packet.Parsed) bool {
+	switch q.IPProto {
+	case ipproto.TCP, ipproto.UDP:
+		return true
+	case ipproto.ICMPv4:
+		return q.IsEchoRequest() || q.IsEchoResponse()
+	}
+	return false
 }

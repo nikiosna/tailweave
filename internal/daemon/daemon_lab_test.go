@@ -8,6 +8,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
+	"net/http"
 	"net/netip"
 	"os"
 	"os/exec"
@@ -132,6 +134,40 @@ func TestWeave(t *testing.T) {
 			t.Errorf("peer-b2 not auto-mapped again: %+v", b2)
 		}
 	})
+}
+
+// TestInbound checks that peers reach services on the host, like with Tailscale: a peer
+// arrives from its own IP, or from the IP it is routed at when it collides with a peer of
+// another tailnet. The peers connect back on request of the lab's probe service, which
+// the host reaches through tailweave too, so the test needs no Docker.
+func TestInbound(t *testing.T) {
+	labtest.RequireLab(t)
+	tw := startTailweave(t, t.TempDir())
+	tw.login(t, labtest.TailnetA)
+	tw.login(t, labtest.TailnetB)
+	st := waitState(t, tw, func(s daemon.State) bool {
+		b1 := device(s, "b", "peer-b1")
+		return b1 != nil && b1.RoutedIP.IsValid() && device(s, "a", "peer-a1") != nil &&
+			s.Tailnets[0].IP.IsValid() && s.Tailnets[1].IP.IsValid()
+	})
+	tcpPort, udpPort := remoteAddrServers(t)
+
+	for i, name := range []string{"peer-a1", "peer-b1"} {
+		tn := st.Tailnets[i]
+		d := device(st, tn.Name, name)
+		t.Run(name, func(t *testing.T) {
+			want := d.RoutedIP.String() // b's peer-b1 collides with peer-a1: 198.18.x
+			if got := waitProbe(t, d.RoutedIP, "tcp", tn.IP, tcpPort, want); got != want {
+				t.Errorf("%s -> tcp %s:%d: host saw %q, want %q", name, tn.IP, tcpPort, got, want)
+			}
+			if got := probe(t, d.RoutedIP, "udp", tn.IP, udpPort); got != want {
+				t.Errorf("%s -> udp %s:%d: host saw %q, want %q", name, tn.IP, udpPort, got, want)
+			}
+			if got := probe(t, d.RoutedIP, "ping", tn.IP, 0); got != "ok" {
+				t.Errorf("%s -> ping %s: %q", name, tn.IP, got)
+			}
+		})
+	}
 }
 
 // TestLifecycle checks that tailnets stay logged in across daemon restarts, and that
@@ -427,6 +463,73 @@ func waitCurl(t *testing.T, host, want string) string {
 	var got string
 	for end := time.Now().Add(20 * time.Second); time.Now().Before(end); time.Sleep(time.Second) {
 		if got = curl(t, host); got == want {
+			break
+		}
+	}
+	return got
+}
+
+// remoteAddrServers starts a TCP (HTTP) and a UDP service on all of the host's addresses
+// that answer with the client's IP, and returns their ports.
+func remoteAddrServers(t *testing.T) (tcpPort, udpPort int) {
+	t.Helper()
+	ln, err := net.Listen("tcp4", "0.0.0.0:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		host, _, _ := net.SplitHostPort(r.RemoteAddr)
+		_, _ = io.WriteString(w, host)
+	})}
+	go func() { _ = srv.Serve(ln) }()
+	t.Cleanup(func() { _ = srv.Close() })
+
+	pc, err := net.ListenPacket("udp4", "0.0.0.0:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = pc.Close() })
+	go func() {
+		buf := make([]byte, 1500)
+		for {
+			n, addr, err := pc.ReadFrom(buf)
+			if err != nil {
+				return
+			}
+			if n == 0 {
+				continue // socat sends an empty datagram at the end of its input
+			}
+			_, _ = pc.WriteTo([]byte(addr.(*net.UDPAddr).IP.String()), addr)
+		}
+	}()
+	return ln.Addr().(*net.TCPAddr).Port, pc.LocalAddr().(*net.UDPAddr).Port
+}
+
+// probe asks the lab probe of the peer the host reaches at peer to connect back to ip:port
+// ("tcp", "udp") or to ping ip, and returns what it got.
+func probe(t *testing.T, peer netip.Addr, kind string, ip netip.Addr, port int) string {
+	t.Helper()
+	c, err := net.DialTimeout("tcp", net.JoinHostPort(peer.String(), "9"), 5*time.Second)
+	if err != nil {
+		t.Logf("probe %s: %v", peer, err)
+		return ""
+	}
+	defer c.Close()
+	_ = c.SetDeadline(time.Now().Add(10 * time.Second))
+	if _, err := fmt.Fprintf(c, "%s %s %d\n", kind, ip, port); err != nil {
+		t.Logf("probe %s: %v", peer, err)
+		return ""
+	}
+	out, _ := io.ReadAll(c)
+	return strings.TrimSpace(string(out))
+}
+
+// waitProbe retries probe until it returns want, for up to 20 seconds, like waitCurl.
+func waitProbe(t *testing.T, peer netip.Addr, kind string, ip netip.Addr, port int, want string) string {
+	t.Helper()
+	var got string
+	for end := time.Now().Add(20 * time.Second); time.Now().Before(end); time.Sleep(time.Second) {
+		if got = probe(t, peer, kind, ip, port); got == want {
 			break
 		}
 	}

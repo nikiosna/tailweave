@@ -3,9 +3,14 @@
 package daemon_test
 
 import (
+	"fmt"
 	"net/netip"
 	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/Nikiosna/tailweave/internal/daemon"
 	"github.com/Nikiosna/tailweave/internal/labtest"
@@ -13,7 +18,8 @@ import (
 
 // TestIsolation checks that only the host itself reaches the tailnets: neither a device
 // on the host's LAN that routes the tailnet ranges via the host, nor one tailnet's
-// namespace, nor a peer in a tailnet gets into a tailnet or the host through tailweave.
+// namespace, nor a peer in a tailnet gets into a tailnet through tailweave. Peers do reach
+// the host itself, but nothing beyond it.
 func TestIsolation(t *testing.T) {
 	labtest.RequireLab(t)
 	tw := startTailweave(t, t.TempDir())
@@ -37,11 +43,52 @@ func TestIsolation(t *testing.T) {
 	})
 
 	t.Run("peers", func(t *testing.T) {
-		// The host listens on SSH; a peer must not reach it via this machine's tailnet IP.
-		// (Pings are no test: with the netns backend, the namespace itself answers them.)
-		self := st.Tailnets[0].IP.String()
-		if out, err := labtest.Output("docker", "exec", "peer-a1", "nc", "-z", "-w2", self, "22"); err == nil {
-			t.Errorf("peer-a1 reaches the host's SSH at %s: %s", self, out)
+		// A peer reaches the host through this machine's IP in its tailnet, like with
+		// Tailscale (TestInbound)...
+		selfA := st.Tailnets[0].IP
+		port, _ := remoteAddrServers(t)
+		if got := peerWget(t, "peer-a1", selfA, port); got != a1.String() {
+			t.Fatalf("peer-a1 -> host at %s:%d: %q, want %s", selfA, port, got, a1)
+		}
+		// ...but nothing behind it, not even when it routes other addresses via this
+		// machine: neither another tailnet's peers, nor the host's other addresses, nor
+		// the LAN.
+		lan := lanClient(t)
+		const lanIP, lanPort = "10.202.0.2", 8099
+		resp := filepath.Join(t.TempDir(), "lan.sh")
+		if err := os.WriteFile(resp, []byte("#!/bin/sh\nprintf 'HTTP/1.0 200 OK\\r\\n\\r\\nlan\\n'\n"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		srv := exec.Command("sudo", "-n", "ip", "netns", "exec", lan, "socat",
+			fmt.Sprintf("TCP-LISTEN:%d,bind=%s,fork,reuseaddr", lanPort, lanIP), "EXEC:"+resp)
+		if err := srv.Start(); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() {
+			_, _ = labtest.Output("sudo", "-n", "pkill", "-f", "TCP-LISTEN:"+fmt.Sprint(lanPort))
+			_ = srv.Wait()
+		})
+		lanURL := fmt.Sprintf("http://%s:%d/", lanIP, lanPort)
+		for i := 0; ; i++ {
+			if _, err := labtest.Output("curl", "-sf", "-m1", lanURL); err == nil {
+				break
+			} else if i == 20 {
+				t.Fatalf("LAN service at %s does not answer the host: %v", lanURL, err)
+			}
+			time.Sleep(250 * time.Millisecond)
+		}
+		for _, tc := range []struct {
+			ip   netip.Addr
+			port int
+		}{
+			{b1, 80}, {b3, 80}, // the peers' web servers
+			{netip.MustParseAddr("10.201.0.1"), port}, {netip.MustParseAddr("10.201.0.5"), port}, // transit
+			{netip.MustParseAddr(lanIP), lanPort},
+		} {
+			peerRoute(t, "peer-a1", tc.ip)
+			if got := peerWget(t, "peer-a1", tc.ip, tc.port); got != "" {
+				t.Errorf("peer-a1 reaches %s:%d via this machine: %q", tc.ip, tc.port, got)
+			}
 		}
 	})
 
@@ -54,6 +101,28 @@ func TestIsolation(t *testing.T) {
 				t.Errorf("namespace of tailnet a reaches %s: %q", ip, out)
 			}
 		}
+	})
+}
+
+// peerWget fetches http://ip:port/ from inside a lab peer and returns the body, or "".
+func peerWget(t *testing.T, peer string, ip netip.Addr, port int) string {
+	t.Helper()
+	out, err := labtest.Output("docker", "exec", peer, "wget", "-qO-", "-T3", fmt.Sprintf("http://%s:%d/", ip, port))
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(out)
+}
+
+// peerRoute makes a lab peer send traffic for ip into its tailnet, via whatever node
+// claims it there (here: none, so the tailnet's own filtering applies too), until the
+// test ends.
+func peerRoute(t *testing.T, peer string, ip netip.Addr) {
+	t.Helper()
+	dst := netip.PrefixFrom(ip, 32).String()
+	labtest.Run(t, "docker", "exec", peer, "ip", "route", "replace", dst, "dev", "tailscale0", "table", "52")
+	t.Cleanup(func() {
+		_, _ = labtest.Output("docker", "exec", peer, "ip", "route", "del", dst, "dev", "tailscale0", "table", "52")
 	})
 }
 

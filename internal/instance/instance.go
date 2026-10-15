@@ -72,6 +72,7 @@ type Instance struct {
 
 	m      *Manager
 	hostIf string
+	nsIf   string
 	stop   context.CancelFunc
 	done   chan struct{} // closed when the supervisor has stopped tailscaled
 
@@ -82,7 +83,8 @@ type Instance struct {
 
 // Namespace describes the instance for netcfg.
 func (i *Instance) Namespace() netcfg.Namespace {
-	return netcfg.Namespace{Tailnet: i.Name, Netns: i.Netns, Gateway: i.Gateway, Tun: Tun}
+	return netcfg.Namespace{Tailnet: i.Name, Netns: i.Netns, Gateway: i.Gateway,
+		HostIP: i.HostIP, Veth: i.nsIf, Tun: Tun}
 }
 
 // Start creates the namespace, starts tailscaled in it and waits for its socket. Leftovers
@@ -103,10 +105,11 @@ func (m *Manager) Start(name string, index int) (*Instance, error) {
 		Gateway: ns,
 		m:       m,
 		hostIf:  fmt.Sprintf("%s%d", netcfg.VethPrefix, index),
+		nsIf:    fmt.Sprintf("twn%d", index),
 		done:    make(chan struct{}),
 	}
 	i.cleanup()
-	if err := i.setupNetns(index); err != nil {
+	if err := i.setupNetns(); err != nil {
 		i.cleanup()
 		return nil, fmt.Errorf("namespace for %s: %w", name, err)
 	}
@@ -132,8 +135,8 @@ func (m *Manager) Start(name string, index int) (*Instance, error) {
 func (i *Instance) stateDir() string { return filepath.Join(i.m.StateDir, i.Name) }
 func (i *Instance) logPath() string  { return filepath.Join(i.stateDir(), "tailscaled.log") }
 
-func (i *Instance) setupNetns(index int) error {
-	nsIf := fmt.Sprintf("twn%d", index)
+func (i *Instance) setupNetns() error {
+	nsIf := i.nsIf
 	for _, args := range [][]string{
 		{"netns", "add", i.Netns},
 		{"link", "add", i.hostIf, "type", "veth", "peer", "name", nsIf, "netns", i.Netns},

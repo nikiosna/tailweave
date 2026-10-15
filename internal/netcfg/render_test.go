@@ -2,6 +2,7 @@ package netcfg
 
 import (
 	"net/netip"
+	"strings"
 	"testing"
 
 	"github.com/Nikiosna/tailweave/internal/weave"
@@ -14,10 +15,13 @@ var (
 		ip("198.18.0.1"): {Tailnet: "b", IP: ip("100.64.0.1")},
 		ip("100.64.0.2"): {Tailnet: "b", IP: ip("100.64.0.2")},
 		ip("100.64.0.1"): {Tailnet: "a", IP: ip("100.64.0.1")},
+	}, Local: map[string]weave.Local{
+		"a": {IP: ip("100.64.0.3")},
+		"b": {IP: ip("100.64.0.3"), PeerAPIPort: 4242},
 	}}
 	nss = []Namespace{
-		{Tailnet: "a", Netns: "tw-a", Gateway: ip("10.200.1.2"), Tun: "ts-a"},
-		{Tailnet: "b", Netns: "tw-b", Gateway: ip("10.200.2.2"), Tun: "ts-b"},
+		{Tailnet: "a", Netns: "tw-a", Gateway: ip("10.200.1.2"), HostIP: ip("10.200.1.1"), Veth: "twn0", Tun: "ts-a"},
+		{Tailnet: "b", Netns: "tw-b", Gateway: ip("10.200.2.2"), HostIP: ip("10.200.2.1"), Veth: "twn1", Tun: "ts-b"},
 	}
 )
 
@@ -48,20 +52,62 @@ table inet tailweave {
 	chain prerouting {
 		type nat hook prerouting priority dstnat; policy accept;
 		ip daddr 198.18.0.1 dnat ip to 100.64.0.1
+		iifname "ts-b" ip daddr 100.64.0.3 tcp dport 4242 accept
+		iifname "ts-b" ip daddr 100.64.0.3 meta l4proto { tcp, udp, icmp } dnat ip to 10.200.2.1
 	}
 	chain forward {
 		type filter hook forward priority filter; policy accept;
 		iifname "ts-b" ct state established,related accept
+		iifname "ts-b" oifname "twn1" ip saddr { 100.64.0.1, 100.64.0.2 } ip daddr 10.200.2.1 ct status dnat accept
 		iifname "ts-b" drop
 	}
 	chain postrouting {
-		type nat hook postrouting priority srcnat; policy accept;
+		type nat hook postrouting priority srcnat - 1; policy accept;
 		oifname "ts-b" ip saddr != 100.64.0.0/10 masquerade
+		oifname "twn1" ct status dnat snat ip to ip saddr map { 100.64.0.2 : 100.64.0.2, 100.64.0.1 : 198.18.0.1 }
 	}
 }
 `
 	if got := NamespaceRules(plan, nss[1]); got != want {
 		t.Errorf("got:\n%s\nwant:\n%s", got, want)
+	}
+
+	// Tailnet a: no PeerAPI port known, no mapped peers.
+	want = `table inet tailweave
+delete table inet tailweave
+table inet tailweave {
+	chain prerouting {
+		type nat hook prerouting priority dstnat; policy accept;
+		iifname "ts-a" ip daddr 100.64.0.3 meta l4proto { tcp, udp, icmp } dnat ip to 10.200.1.1
+	}
+	chain forward {
+		type filter hook forward priority filter; policy accept;
+		iifname "ts-a" ct state established,related accept
+		iifname "ts-a" oifname "twn0" ip saddr { 100.64.0.1 } ip daddr 10.200.1.1 ct status dnat accept
+		iifname "ts-a" drop
+	}
+	chain postrouting {
+		type nat hook postrouting priority srcnat - 1; policy accept;
+		oifname "ts-a" ip saddr != 100.64.0.0/10 masquerade
+		oifname "twn0" ct status dnat snat ip to ip saddr map { 100.64.0.1 : 100.64.0.1 }
+	}
+}
+`
+	if got := NamespaceRules(plan, nss[0]); got != want {
+		t.Errorf("got:\n%s\nwant:\n%s", got, want)
+	}
+}
+
+func TestNamespaceRulesWithoutSelf(t *testing.T) {
+	// Before the instance knows its IP, or without routed peers, nothing gets in.
+	p := weave.Plan{Routes: plan.Routes}
+	got := NamespaceRules(p, nss[1])
+	if strings.Contains(got, "10.200.2.1") || strings.Contains(got, "map") {
+		t.Errorf("inbound rules without a self IP:\n%s", got)
+	}
+	p = weave.Plan{Local: plan.Local}
+	if got := NamespaceRules(p, nss[1]); strings.Contains(got, "10.200.2.1") {
+		t.Errorf("inbound rules without routed peers:\n%s", got)
 	}
 }
 

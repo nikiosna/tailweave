@@ -51,19 +51,25 @@ tailnets with each other or with your LAN:
 
 - **This machine → tailnets:** programs on the host reach every routed peer in every
   tailnet, by name or IP.
+- **Tailnets → this machine:** yes, like with Tailscale. Peers reach services on the host
+  through this machine's IP in their tailnet (TCP, UDP and ping); each tailnet's ACLs
+  decide who gets in, and the host's own firewall still applies. A remapped peer shows
+  up with the IP it is routed at here (e.g. `198.18.0.1`), so answers find their way
+  back; a peer whose IP collision is unresolved does not get in.
 - **Tailnet → tailnet:** no. A peer in one tailnet cannot reach a peer in another one
   through tailweave. Each instance advertises no routes, so peers only ever send it
-  traffic for its own address. Its namespace also refuses to forward anything that
-  arrives from the tailnet, and the host forwards no new connections between namespaces.
+  traffic for its own address, and that traffic ends on the host itself: tailweave
+  delivers it locally and never forwards it, neither into another tailnet nor anywhere
+  else. Its namespace refuses to forward anything else that arrives from the tailnet,
+  and the host forwards no new connections between namespaces.
 - **LAN → tailnets:** no. tailweave routes only traffic the host itself generates into
   the tailnets and drops new forwarded connections into the namespaces, so a device
   that routes `100.64.0.0/10` via your machine does not get into a tailnet. Containers
   and VMs on the host count as forwarded traffic too and don't reach the tailnets.
-- **Tailnets → this machine:** not yet. Inbound connections to services on the host are
-  planned.
 
 Programs on the host can still relay between tailnets on their own (a proxy, an SSH
-tunnel), just as with any two VPNs running side by side.
+tunnel, a service that one tailnet reaches and that connects into another), just as with
+any two VPNs running side by side.
 
 ## Conflicts it detects
 

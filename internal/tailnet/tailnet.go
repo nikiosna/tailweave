@@ -11,6 +11,7 @@ import (
 	"net"
 	"net/http"
 	"net/netip"
+	"net/url"
 	"time"
 
 	"github.com/Nikiosna/tailweave/internal/weave"
@@ -38,6 +39,7 @@ type node struct {
 	HostName     string
 	DNSName      string
 	TailscaleIPs []netip.Addr
+	PeerAPIURL   []string // only set for Self, e.g. "http://100.64.0.3:41234"
 	Online       bool
 }
 
@@ -95,12 +97,28 @@ func convert(name string, st status) Status {
 	}
 	if st.Self != nil {
 		tn.Self = peer(st.Self)
+		tn.PeerAPIPort = peerAPIPort(st.Self, tn.Self.IPv4())
 	}
 	for _, n := range st.Peer {
 		tn.Peers = append(tn.Peers, peer(n))
 	}
 	s.Tailnet = tn
 	return s
+}
+
+// peerAPIPort returns the port of n's PeerAPI on ip, or 0.
+func peerAPIPort(n *node, ip netip.Addr) uint16 {
+	for _, s := range n.PeerAPIURL {
+		u, err := url.Parse(s)
+		if err != nil {
+			continue
+		}
+		ap, err := netip.ParseAddrPort(u.Host)
+		if err == nil && ap.Addr() == ip {
+			return ap.Port()
+		}
+	}
+	return 0
 }
 
 func peer(n *node) weave.Peer {

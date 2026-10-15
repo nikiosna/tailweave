@@ -41,19 +41,24 @@ no personal paths. Commit locally only; pushing is done by the maintainer.
      CGNAT, the pool, transit or the DNS address, or uses tailweave's ip rule priority or
      table, with a hint to quit Tailscale if it is running; teardown removes only
      tailweave's own rule and routes (`TestForeignTailscale`, official client on the host)
-   - [ ] Inbound: peers connecting to services on the host
+   - [x] Inbound like with Tailscale: a peer's packet to this machine's IP in its tailnet
+     ends on the host (local delivery to the transit address, never forwarded), from the
+     peer's routed IP; the tailnet's ACLs decide, unrouted peers stay out; PeerAPI stays
+     with Tailscale (`TestInbound` on both backends and macOS, `TestIsolation/peers`)
    - [ ] Remaining conflicts: subnet routes (same merge model), exit nodes
 3. **macOS version** *(in progress)*
    - [x] Backend `tsnet` (`internal/engine`, `internal/router`, `internal/hostnet`): one
      in-process tsnet engine per tailnet, each with an in-memory TUN, behind a userspace
-     router that owns one host TUN (utun on macOS) and NATs 1:1 by the weave plan; flow
-     tracking keeps the isolation rules. Runs on Linux too (`"backend": "tsnet"`); the lab
+     router that owns one host TUN (utun on macOS) and NATs 1:1 by the weave plan, with
+     no state: from a tailnet it only passes packets for the engine's own IP from routed
+     peers. Runs on Linux too (`"backend": "tsnet"`); the lab
      tests pass with it there
    - [x] macOS host setup: utun address, routes for 100.64.0.0/10 and the pool, DNS
      service on a lo0 alias, resolver registration via `scutil`; cross-built from the
      Linux VM
    - [x] macOS VM in the lab (`make mac-vm-up`, `make mac-test-lab`): `TestWeave`,
-     `TestLifecycle`, `TestLoginSSO` pass on macOS 27; peers do not reach the host
+     `TestLifecycle`, `TestLoginSSO`, `TestForeignTailscale`, `TestInbound` pass on
+     macOS 27
    - [ ] `TestIsolation` on macOS (needs a way to run commands on peers without Docker)
    - [ ] Network Extension instead of a root daemon with utun (same router, packets
      from `NEPacketTunnelFlow`)
@@ -105,7 +110,10 @@ Keep this list current when finishing or starting a step.
   10.99.0.1; router-b also routes the Lima LAN 192.168.104.0/24, user-v2), `exit-nodes` (exit-a,
   exit-b), `dns-suffix` (both tailnets use base domain a.lab).
 - Peer test services: HTTP :80 and UDP :8 return the peer name, UDP :7 echo,
-  iperf3 server. Use them to tell which tailnet answered.
+  iperf3 server. Use them to tell which tailnet answered. TCP :9 is a probe that connects
+  back on request (`lab/peer/probe.sh`: send `tcp|udp|ping <IPv4> <port>`, get the answer),
+  so tests drive peers without Docker, e.g. from the macOS VM (`TestInbound`). Changes to
+  `lab/peer` need `make lab-up` to rebuild the peers.
 - `make playground-up` runs plain tailscaled per tailnet in netns `tw-a` / `tw-b`
   (veth 10.200.<n>.0/30, control sockets `/run/tailweave-lab/<net>.sock`), without
   tailweave; only `TestPlaygroundIsolation` uses it.
@@ -158,6 +166,21 @@ Keep this list current when finishing or starting a step.
   exit; the tailscaled state in `<stateDir>/tailnets/<name>` stays. It also sets the
   host's `net.ipv4.ip_forward=1` and leaves it on. tailscaled's own netfilter rules in
   the namespaces stay on and let the forwarded host traffic through.
+- Inbound, netns backend: the namespace DNATs new TCP/UDP/ICMP on `ts0` for its self IP
+  to the host's `twh<i>` address (except tailscaled's PeerAPI port, from the status'
+  `PeerAPIURL`), forwards it to `twn<i>` only from routed peers (`ct status dnat`), and
+  SNATs the real peer IP to the routed one via a map. Its postrouting chain runs at
+  `srcnat - 1`, before tailscaled's, which would masquerade forwarded traffic to the
+  namespace's veth address. On the host this is INPUT, the forward filter is untouched.
+- Inbound, tsnet backend: with a custom `Tun`, tsnet leaves `ProcessLocalIPs` off and only
+  sets `CheckLocalTransportEndpoints`, so netstack keeps packets for its own listeners,
+  its own dials and the PeerAPI (in tsnet on the fake port 1) and hands everything else
+  for the self IP to the router's device. The router passes TCP, UDP and ICMP echo; other
+  ICMP would need its embedded header translated.
+- rp_filter needs no change, even strict: the kernel validates a source with `iif lo`,
+  so the reverse lookup hits table 5180, whose route leads back through the interface
+  the packet came in on (`twh<i>` of the peer's tailnet, or the TUN). Verified with
+  `rp_filter=1`.
 - `tailweave run` first removes its own leftovers of a crashed run (`backend.Cleanup`), then
   runs `internal/preflight` against the host (Linux: `ip -j route/rule/addr`,
   `/proc/*/comm`; macOS: `netstat -rn`, `ifconfig`, `ps`). Default routes and /1 halves
@@ -175,8 +198,8 @@ Keep this list current when finishing or starting a step.
 - The tsnet backend owns one TUN (`tailweave0` on Linux, the next free `utun` on macOS)
   with the first address of `transit` (10.201.0.1). Only 100.64.0.0/10 and the pool are
   routed into it (Linux: table 5180 with `iif lo`); the router drops everything not
-  from 10.201.0.1, anything for an unrouted IP, and packets from a tailnet that answer
-  no flow the host opened. On macOS the DNS address sits on lo0 and the resolver
+  from 10.201.0.1, anything for an unrouted IP, and packets from a tailnet that are not
+  for the engine's own IP or come from an unrouted peer. On macOS the DNS address sits on lo0 and the resolver
   settings under `State:/Network/Service/tailweave/DNS` (`scutil`); all of it goes away
   on exit. It turns off tsnet's log upload to Tailscale (`envknob.SetNoLogsNoSupport`).
 - Lima's macOS guests have no passwordless sudo; `mac-setup.sh` adds
