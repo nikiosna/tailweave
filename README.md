@@ -12,7 +12,8 @@ them.
 > Development is AI-driven and validated only by tests in VMs: a Linux VM running a lab
 > with two headscale servers and their peers, and a macOS VM. See [AGENTS.md](AGENTS.md).
 > The first manual check on a real Mac: logging in to Tailscale's own control server via
-> its login link and to a self-hosted headscale with a preauth key, side by side, works.
+> its login link and to a self-hosted headscale with a preauth key, side by side, works,
+> and peers of both tailnets answer ping and serve websites by their MagicDNS names.
 
 ## Install
 
