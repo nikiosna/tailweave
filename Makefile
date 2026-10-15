@@ -12,6 +12,7 @@ GO_TEST_FLAGS ?=
 MAC_TEST_FLAGS ?= -test.v
 
 NO_VM     ?=
+VERSION   ?= $(shell git describe --always --dirty 2>/dev/null || echo dev)
 
 ifeq ($(NO_VM),)
 IN_LAB := limactl shell --workdir $(CURDIR) $(VM) --
@@ -120,8 +121,8 @@ ui-tunnel: ## Make the UI of `make ui` reachable at http://127.0.0.1:5250 on the
 
 # --- Go --------------------------------------------------------------------
 
-build: ## Build binaries into ./bin
-	$(SH) 'go build -o bin/ ./cmd/...'
+build: ## Build binaries into ./bin (VERSION sets what `tailweave version` prints)
+	$(SH) 'go build -ldflags "-X main.version=$(VERSION)" -o bin/ ./cmd/...'
 
 test: ## Unit tests
 	$(SH) 'go test $(GO_TEST_FLAGS) ./...'

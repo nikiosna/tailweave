@@ -1,7 +1,9 @@
 // Command tailweave joins one machine to several tailnets at once.
 //
-// `tailweave run` is the daemon: it runs one tailscaled per tailnet in its own network
-// namespace and merges the tailnets into the host: routes, collision handling and DNS.
+// `tailweave run` is the daemon: it runs one Tailscale instance per tailnet, isolated
+// from the others (a tailscaled per network namespace, or a tsnet engine behind a
+// userspace router), and merges the tailnets into the host: routes, collision handling
+// and DNS.
 // The other commands control it through its Unix socket; `tailweave login` adds tailnets.
 // `tailweave ui` adds an optional web UI on top. See AGENTS.md for the roadmap.
 package main

@@ -10,12 +10,22 @@ them from the command line.
 > backend that needs no namespaces (Tailscale engines in-process behind a userspace
 > router) brings the same to macOS; it is being tested there now.
 
+## Install
+
+Build from source with Go 1.27 and run `sudo tailweave run`; then
+`sudo tailweave login <name>` adds a tailnet. Requirements, service files for systemd
+and launchd, first steps and known limitations: [docs/install.md](docs/install.md).
+
 ## Why
 
 A Tailscale client can only be in one tailnet at a time. Proxy-based workarounds only
 forward TCP, so WebRTC, QUIC and programs without proxy support don't work through them.
 
 ## How it is supposed to work
+
+![This machine runs one Tailscale instance per tailnet behind the tailweave router; both
+tailnets have a peer at 100.64.0.1, the one in home appears locally as 198.18.0.1; the
+tailnets do not reach each other, and the LAN does not reach them](docs/how-it-works.svg)
 
 - **One Tailscale instance per tailnet**, each isolated in its own network stack.
   Linux: a tailscaled per network namespace. macOS (and optionally Linux): a Tailscale

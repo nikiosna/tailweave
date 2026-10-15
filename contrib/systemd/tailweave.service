@@ -1,0 +1,18 @@
+[Unit]
+Description=tailweave: join several tailnets at once
+Documentation=https://github.com/Nikiosna/tailweave
+Wants=network-online.target systemd-resolved.service
+After=network-online.target systemd-resolved.service
+
+[Service]
+# tailweave sets up routes, a TUN or network namespaces and DNS, so it runs as root.
+ExecStart=/usr/local/bin/tailweave run -config /etc/tailweave/config.json
+Restart=on-failure
+RestartSec=5
+# SIGTERM makes tailweave remove its routes, rules and namespaces before it exits.
+KillSignal=SIGTERM
+TimeoutStopSec=30
+# Logs go to the journal: journalctl -u tailweave
+
+[Install]
+WantedBy=multi-user.target

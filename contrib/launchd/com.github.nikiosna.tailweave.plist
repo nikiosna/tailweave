@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- tailweave daemon. Install to /Library/LaunchDaemons (owner root:wheel, mode 644);
+     it runs as root and is restarted when it exits. -->
+<plist version="1.0">
+<dict>
+	<key>Label</key>
+	<string>com.github.nikiosna.tailweave</string>
+	<key>ProgramArguments</key>
+	<array>
+		<string>/usr/local/bin/tailweave</string>
+		<string>run</string>
+		<string>-config</string>
+		<string>/etc/tailweave/config.json</string>
+	</array>
+	<key>RunAtLoad</key>
+	<true/>
+	<key>KeepAlive</key>
+	<true/>
+	<key>ThrottleInterval</key>
+	<integer>5</integer>
+	<key>StandardOutPath</key>
+	<string>/var/log/tailweave.log</string>
+	<key>StandardErrorPath</key>
+	<string>/var/log/tailweave.log</string>
+</dict>
+</plist>
