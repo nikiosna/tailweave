@@ -47,6 +47,11 @@ running, start the service, which also starts at every boot:
 | Linux | `sudo systemctl enable --now tailweave` | `journalctl -u tailweave -f` | `sudo systemctl disable --now tailweave` |
 | macOS | `sudo launchctl bootstrap system /Library/LaunchDaemons/com.github.nikiosna.tailweave.plist` | `tail -f /var/log/tailweave.log` | `sudo launchctl bootout system/com.github.nikiosna.tailweave` |
 
+To update, `git pull`, `make` and `sudo make install` again, then restart the running
+service so it picks up the new binary: `sudo systemctl restart tailweave` on Linux,
+`sudo launchctl kickstart -k system/com.github.nikiosna.tailweave` on macOS
+(`make install` prints the right command). Your tailnets come back by themselves.
+
 `sudo make uninstall` stops the service and removes the binary and the service file; the
 state (your tailnets) stays in the state directory below. `PREFIX` (default `/usr/local`)
 and `DESTDIR` work as usual.

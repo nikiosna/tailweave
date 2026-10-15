@@ -65,17 +65,27 @@ ifeq ($(OS),Darwin)
 	install -d $(dir $(LAUNCHD_PLIST))
 	sed 's|/usr/local/bin/tailweave|$(PREFIX)/bin/tailweave|' contrib/launchd/$(LAUNCHD_LABEL).plist > $(LAUNCHD_PLIST)
 	chmod 644 $(LAUNCHD_PLIST)
-	@echo; echo "Installed. Start the service (and at every boot):"
-	@echo "  sudo launchctl bootstrap system $(LAUNCHD_PLIST:$(DESTDIR)%=%)"
-	@echo "Logs: /var/log/tailweave.log. Then add a tailnet: sudo tailweave login <name>"
+	@if [ -z "$(DESTDIR)" ] && launchctl print system/$(LAUNCHD_LABEL) >/dev/null 2>&1; then \
+		echo; echo "Installed. The service still runs the old version, restart it:"; \
+		echo "  sudo launchctl kickstart -k system/$(LAUNCHD_LABEL)"; \
+	else \
+		echo; echo "Installed. Start the service (and at every boot):"; \
+		echo "  sudo launchctl bootstrap system $(LAUNCHD_PLIST:$(DESTDIR)%=%)"; \
+		echo "Logs: /var/log/tailweave.log. Then add a tailnet: sudo tailweave login <name>"; \
+	fi
 else
 	install -d $(dir $(SYSTEMD_UNIT))
 	sed 's|/usr/local/bin/tailweave|$(PREFIX)/bin/tailweave|' contrib/systemd/tailweave.service > $(SYSTEMD_UNIT)
 	chmod 644 $(SYSTEMD_UNIT)
 	@if [ -z "$(DESTDIR)" ] && command -v systemctl >/dev/null; then systemctl daemon-reload; fi
-	@echo; echo "Installed. Start the service (and at every boot):"
-	@echo "  sudo systemctl enable --now tailweave"
-	@echo "Logs: journalctl -u tailweave -f. Then add a tailnet: sudo tailweave login <name>"
+	@if [ -z "$(DESTDIR)" ] && systemctl is-active --quiet tailweave 2>/dev/null; then \
+		echo; echo "Installed. The service still runs the old version, restart it:"; \
+		echo "  sudo systemctl restart tailweave"; \
+	else \
+		echo; echo "Installed. Start the service (and at every boot):"; \
+		echo "  sudo systemctl enable --now tailweave"; \
+		echo "Logs: journalctl -u tailweave -f. Then add a tailnet: sudo tailweave login <name>"; \
+	fi
 endif
 
 # Stopping the service makes tailweave remove its routes and DNS settings. The state
