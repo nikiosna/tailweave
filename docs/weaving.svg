@@ -1,0 +1,114 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 520" width="960" height="520" role="img" aria-labelledby="title desc">
+  <title id="title">How tailweave weaves tailnets together</title>
+  <desc id="desc">Each peer of the tailnets work and home is a thread. tailweave weaves all threads into one address space on this machine, where every peer keeps its real IP. Only collisions are remapped: build in work and nas in home both have 100.64.0.1; work is listed first and keeps it, nas is woven in at 198.18.0.1, and DNS resolves its name to that address.</desc>
+  <style>
+    svg { --bg: #f8fafc; --card: #ffffff; --line: #cbd5e1; --text: #0f172a; --muted: #64748b;
+          --work: #2563eb; --work-soft: #eff6ff; --home: #0f766e; --home-soft: #f0fdfa;
+          --map: #c2410c; --warp: #a8b3c2; }
+    @media (prefers-color-scheme: dark) {
+      svg { --bg: #0d1117; --card: #161b22; --line: #3d444d; --text: #e6edf3; --muted: #9198a1;
+            --work: #58a6ff; --work-soft: #0f2340; --home: #3fd0b8; --home-soft: #0b2a27;
+            --map: #f0883e; --warp: #545d68; }
+    }
+    text { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+           fill: var(--text); font-size: 14px; }
+    .bg { fill: var(--bg); }
+    .card { fill: var(--card); stroke: var(--line); stroke-width: 1.5; }
+    .h { font-size: 16px; font-weight: 600; }
+    .b { font-weight: 600; }
+    .s { font-size: 12.5px; fill: var(--muted); }
+    .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 13px; }
+    .work-box { fill: var(--work-soft); stroke: var(--work); stroke-width: 1.5; }
+    .home-box { fill: var(--home-soft); stroke: var(--home); stroke-width: 1.5; }
+    .work { fill: var(--work); }
+    .home { fill: var(--home); }
+    .map { fill: var(--map); }
+    .t { fill: none; stroke-width: 6; stroke-linecap: round; }
+    .t-work { stroke: var(--work); }
+    .t-home { stroke: var(--home); }
+    .gap { fill: none; stroke: var(--bg); stroke-width: 14; }
+    .warp { fill: none; stroke: var(--warp); stroke-width: 8; stroke-linecap: round; }
+    .clash { fill: none; stroke: var(--map); stroke-width: 1.5; stroke-dasharray: 4 3; }
+  </style>
+
+  <rect class="bg" x="0" y="0" width="960" height="520" rx="12"/>
+
+  <!-- tailnets -->
+  <rect class="work-box" x="20" y="40" width="230" height="180" rx="12"/>
+  <text class="h work" x="40" y="72">tailnet work</text>
+  <rect class="home-box" x="20" y="270" width="230" height="180" rx="12"/>
+  <text class="h home" x="40" y="302">tailnet home</text>
+  <text class="b" x="40" y="115">build</text>
+  <text class="mono map" x="110" y="115">100.64.0.1</text>
+  <text class="b" x="40" y="155">wiki</text>
+  <text class="mono" x="110" y="155">100.64.0.3</text>
+  <text class="b" x="40" y="195">ci</text>
+  <text class="mono" x="110" y="195">100.64.0.6</text>
+  <text class="b" x="40" y="345">nas</text>
+  <text class="mono map" x="110" y="345">100.64.0.1</text>
+  <text class="b" x="40" y="385">raspi</text>
+  <text class="mono" x="110" y="385">100.64.0.2</text>
+  <text class="b" x="40" y="425">tv</text>
+  <text class="mono" x="110" y="425">100.64.0.5</text>
+  <path class="clash" d="M196 116 H236 V334 H196"/>
+  <text class="s map" x="40" y="250">same IP in both tailnets</text>
+
+  <!-- this machine -->
+  <rect class="card" x="660" y="40" width="280" height="410" rx="12"/>
+  <text class="h" x="680" y="72">This machine</text>
+  <text class="s" x="680" y="92">one address space</text>
+  <text class="mono" x="680" y="125">100.64.0.1</text>
+  <text class="b" x="788" y="125">build</text>
+  <text class="s work" x="860" y="125">work</text>
+  <text class="mono" x="680" y="225">100.64.0.3</text>
+  <text class="b" x="788" y="225">wiki</text>
+  <text class="s work" x="860" y="225">work</text>
+  <text class="mono" x="680" y="325">100.64.0.6</text>
+  <text class="b" x="788" y="325">ci</text>
+  <text class="s work" x="860" y="325">work</text>
+  <text class="mono map" x="680" y="405">198.18.0.1</text>
+  <text class="b" x="788" y="405">nas</text>
+  <text class="s home" x="860" y="405">home</text>
+  <text class="mono" x="680" y="175">100.64.0.2</text>
+  <text class="b" x="788" y="175">raspi</text>
+  <text class="s home" x="860" y="175">home</text>
+  <text class="mono" x="680" y="275">100.64.0.5</text>
+  <text class="b" x="788" y="275">tv</text>
+  <text class="s home" x="860" y="275">home</text>
+  <text class="s" x="680" y="426">100.64.0.1 in home; work is listed</text>
+  <text class="s" x="680" y="442">first and keeps it. DNS: nas → 198.18.0.1</text>
+
+  <!-- threads -->
+  <path class="gap" d="M250 110 C311 110 311 120 372 120 H660"/>
+  <path class="t t-work" d="M250 110 C311 110 311 120 372 120 H660"/>
+  <path class="gap" d="M250 150 C311 150 311 220 372 220 H660"/>
+  <path class="t t-work" d="M250 150 C311 150 311 220 372 220 H660"/>
+  <path class="gap" d="M250 190 C311 190 311 320 372 320 H660"/>
+  <path class="t t-work" d="M250 190 C311 190 311 320 372 320 H660"/>
+  <path class="gap" d="M250 340 C311 340 311 400 372 400 H660"/>
+  <path class="t t-home" d="M250 340 C311 340 311 400 372 400 H660"/>
+  <path class="gap" d="M250 380 C311 380 311 170 372 170 H660"/>
+  <path class="t t-home" d="M250 380 C311 380 311 170 372 170 H660"/>
+  <path class="gap" d="M250 420 C311 420 311 270 372 270 H660"/>
+  <path class="t t-home" d="M250 420 C311 420 311 270 372 270 H660"/>
+
+  <!-- warp: tailweave -->
+  <path class="gap" d="M390 96 V109 M390 131 V209 M390 231 V309 M390 331 V430"/>
+  <path class="warp" d="M390 96 V109 M390 131 V209 M390 231 V309 M390 331 V430"/>
+  <path class="gap" d="M420 96 V159 M420 181 V259 M420 281 V389 M420 411 V430"/>
+  <path class="warp" d="M420 96 V159 M420 181 V259 M420 281 V389 M420 411 V430"/>
+  <path class="gap" d="M450 96 V109 M450 131 V209 M450 231 V309 M450 331 V430"/>
+  <path class="warp" d="M450 96 V109 M450 131 V209 M450 231 V309 M450 331 V430"/>
+  <path class="gap" d="M480 96 V159 M480 181 V259 M480 281 V389 M480 411 V430"/>
+  <path class="warp" d="M480 96 V159 M480 181 V259 M480 281 V389 M480 411 V430"/>
+  <path class="gap" d="M510 96 V109 M510 131 V209 M510 231 V309 M510 331 V430"/>
+  <path class="warp" d="M510 96 V109 M510 131 V209 M510 231 V309 M510 331 V430"/>
+  <path class="gap" d="M540 96 V159 M540 181 V259 M540 281 V389 M540 411 V430"/>
+  <path class="warp" d="M540 96 V159 M540 181 V259 M540 281 V389 M540 411 V430"/>
+  <path class="gap" d="M570 96 V109 M570 131 V209 M570 231 V309 M570 331 V430"/>
+  <path class="warp" d="M570 96 V109 M570 131 V209 M570 231 V309 M570 331 V430"/>
+
+  <text class="h" x="480" y="72" text-anchor="middle">tailweave</text>
+  <text class="s" x="480" y="468" text-anchor="middle">every peer keeps its IP,</text>
+  <text class="s" x="480" y="486" text-anchor="middle">only collisions are remapped</text>
+</svg>

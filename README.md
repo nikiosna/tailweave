@@ -51,6 +51,10 @@ tailnets do not reach each other, and the LAN does not reach them](docs/how-it-w
   devices by hand, `logout`/`remove` leave a tailnet. `tailweave ui` starts an optional
   web UI showing the same.
 
+![Every peer of the tailnets work and home is a thread that tailweave weaves into one
+address space on this machine; each peer keeps its IP, only nas in home, whose
+100.64.0.1 is already taken by build in work, is woven in at 198.18.0.1](docs/weaving.svg)
+
 ## What reaches what
 
 tailweave connects **this machine** to several tailnets. It does not connect the
