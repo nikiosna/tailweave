@@ -2,13 +2,12 @@
 
 Be a real node in several tailnets at once: with TUN, UDP and MagicDNS, no proxy.
 tailweave detects conflicts between the tailnets, shows them, and lets you resolve
-them from the command line.
+them.
 
-> **Status: experimental.** On Linux, tailweave runs one tailscaled per tailnet in its own
-> network namespace and merges the tailnets: login via web link (SSO) or preauth key,
-> routing, collision handling, MagicDNS, a CLI and an optional web UI work. A second
-> backend that needs no namespaces (Tailscale engines in-process behind a userspace
-> router) brings the same to macOS; it is being tested there now.
+> [!WARNING]
+> **Status: heavily experimental and untested.** This is just another AI-created code
+> project. It has not been properly tested in real-world scenarios yet! Manage your
+> expectations accordingly.
 
 ## Install
 
