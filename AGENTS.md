@@ -29,7 +29,7 @@ no personal paths. Commit locally only; pushing is done by the maintainer.
      runs only on demand with `tailweave ui`
    - [x] Daemon manages the instances itself (`internal/instance`): `tailweave login`
      creates namespace `tailweave-<name>`, veth `twh<i>`/`twn<i>` from 10.201.0.0/16 and a
-     supervised tailscaled, and logs in with a preauth key (`-auth-key file:|-`);
+     supervised tailscaled, and logs in with a preauth key (`-auth-key <key>|file:|-`);
      `logout`, `remove`; tailnets live in the state file and survive restarts
      (`TestWeave`, `TestLifecycle`)
    - [x] SSO login via web link: without a key, `tailweave login` prints the control

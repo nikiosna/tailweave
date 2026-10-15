@@ -92,7 +92,8 @@ func TestReadAuthKey(t *testing.T) {
 		{"", "", "", true},
 		{"file:" + file, "", "tskey-file", true},
 		{"-", " tskey-stdin\n", "tskey-stdin", true},
-		{"tskey-literal", "", "", false},
+		{"tskey-literal", "", "tskey-literal", true},
+		{" ", "", "", false},
 		{"-", "\n", "", false},
 		{"file:/nonexistent", "", "", false},
 	} {

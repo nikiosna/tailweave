@@ -17,7 +17,7 @@ func login(ctx context.Context, args []string) error {
 	fs, socket := flags("login")
 	server := fs.String("login-server", "", "control server URL (default "+daemon.DefaultLoginServer+", or the one used before)")
 	hostname := fs.String("hostname", "", "this machine's name in the tailnet (default: its host name)")
-	authKey := fs.String("auth-key", "", "preauth key as file:<path>, or - to read it from stdin; without it, log in via a web link")
+	authKey := fs.String("auth-key", "", "preauth key, file:<path> to read it from a file, or - to read it from stdin; without it, log in via a web link")
 	timeout := fs.Duration("timeout", 0, "how long to wait for the login (default 1m with a key, 10m without)")
 	if err := parse(fs, args, 1); err != nil {
 		return err
@@ -42,8 +42,8 @@ func login(ctx context.Context, args []string) error {
 	return waitLogin(ctx, c.State, name, os.Stdout)
 }
 
-// readAuthKey resolves the -auth-key flag. Keys are not accepted on the command line,
-// where other users could read them in the process list.
+// readAuthKey resolves the -auth-key flag: the key itself, like `tailscale up`, or
+// file:<path> or - for keys that should not show up in the process list.
 func readAuthKey(flag string, stdin io.Reader) (string, error) {
 	var b []byte
 	var err error
@@ -55,7 +55,7 @@ func readAuthKey(flag string, stdin io.Reader) (string, error) {
 	case strings.HasPrefix(flag, "file:"):
 		b, err = os.ReadFile(strings.TrimPrefix(flag, "file:"))
 	default:
-		return "", errors.New("-auth-key takes file:<path> or -, not the key itself")
+		b = []byte(flag)
 	}
 	if err != nil {
 		return "", err

@@ -36,7 +36,7 @@ const usage = `usage: tailweave <command> [flags]
 commands:
   run [-config <file>]               the daemon: merge all tailnets into this machine
   login <tailnet> [flags]            add a tailnet or log in again: via a web link, or
-                                     with -auth-key file:<path>|- (see login -h)
+                                     with -auth-key <key>|file:<path>|- (see login -h)
   logout <tailnet>                   log out; the tailnet stays known
   remove <tailnet>                   log out and forget the tailnet
   status [-json]                     tailnets, devices and conflicts
