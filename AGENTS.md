@@ -59,6 +59,9 @@ no personal paths. Commit locally only; pushing is done by the maintainer.
    - [x] macOS VM in the lab (`make mac-vm-up`, `make mac-test-lab`): `TestWeave`,
      `TestLifecycle`, `TestLoginSSO`, `TestForeignTailscale`, `TestInbound` pass on
      macOS 27
+   - [x] First manual check on a real Mac (macOS 27): `tailweave login` into Tailscale's
+     control server via login URL and into a self-hosted headscale with a preauth key
+     at the same time; traffic not checked yet
    - [ ] `TestIsolation` on macOS (needs a way to run commands on peers without Docker)
    - [ ] Network Extension instead of a root daemon with utun (same router, packets
      from `NEPacketTunnelFlow`)
