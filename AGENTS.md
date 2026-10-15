@@ -147,8 +147,8 @@ Keep this list current when finishing or starting a step.
   delete those nodes from headscale afterwards. `make mac-test-lab` runs the daemon tests
   in the macOS VM (`$TAILWEAVE_BIN` points them to the cross-built binary). Platform
   specific checks live in `platform_<os>_lab_test.go`.
-- CI (`.github/workflows/ci.yml`) runs both; the lab job has not run yet because
-  there is no GitHub repository so far.
+- CI (`.github/workflows/ci.yml`) runs both, but only when started by hand
+  (`workflow_dispatch`); automatic runs are off for now.
 
 ## Gotchas
 

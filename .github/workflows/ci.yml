@@ -1,9 +1,8 @@
 name: CI
 
+# Manual only for now; automatic runs on push and pull requests are off.
 on:
-  push:
-    branches: [main]
-  pull_request:
+  workflow_dispatch:
 
 permissions:
   contents: read
