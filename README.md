@@ -8,6 +8,9 @@ them.
 > **Status: heavily experimental and untested.** This is just another AI-created code
 > project. It has not been properly tested in real-world scenarios yet! Manage your
 > expectations accordingly.
+>
+> Development is AI-driven and validated only by tests in VMs: a Linux VM running a lab
+> with two headscale servers and their peers, and a macOS VM. See [AGENTS.md](AGENTS.md).
 
 ## Install
 
