@@ -42,7 +42,8 @@ commands:
                                      with -auth-key <key>|file:<path>|- (see login -h)
   logout <tailnet>                   log out; the tailnet stays known
   remove <tailnet>                   log out and forget the tailnet
-  status [-json]                     tailnets, devices and conflicts
+  status [<tailnet>] [-a] [-json]    tailnets, devices and conflicts; -a also lists
+                                     offline devices
   set -auto-map=<true|false>         remap colliding devices automatically or not
   set -operator=<user>               let a user change tailweave without sudo
                                      (root only; -operator= removes it)
@@ -164,20 +165,34 @@ func run(ctx context.Context, args []string) error {
 func status(ctx context.Context, args []string) error {
 	fs, socket := flags("status")
 	asJSON := fs.Bool("json", false, "print the daemon's state as JSON")
-	if err := parse(fs, args); err != nil {
+	all := fs.Bool("a", false, "also list offline devices that need no attention")
+	if err := parse(fs, args, 0, 1); err != nil {
 		return err
 	}
 	s, err := client.New(*socket).State(ctx)
 	if err != nil {
 		return err
 	}
+	o := statusOptions{all: *all, tailnet: fs.Arg(0), color: colorful(os.Stdout)}
+	if o.tailnet != "" && !slices.ContainsFunc(s.Tailnets, func(t daemon.TailnetState) bool { return t.Name == o.tailnet }) {
+		return fmt.Errorf("no tailnet %q (see tailweave status)", o.tailnet)
+	}
 	if *asJSON {
 		e := json.NewEncoder(os.Stdout)
 		e.SetIndent("", "  ")
 		return e.Encode(s)
 	}
-	printStatus(os.Stdout, s)
+	printStatus(os.Stdout, s, o)
 	return nil
+}
+
+// colorful reports whether f is a terminal that wants colors (see no-color.org).
+func colorful(f *os.File) bool {
+	if os.Getenv("NO_COLOR") != "" || os.Getenv("TERM") == "dumb" {
+		return false
+	}
+	fi, err := f.Stat()
+	return err == nil && fi.Mode()&os.ModeCharDevice != 0
 }
 
 func set(ctx context.Context, args []string) error {

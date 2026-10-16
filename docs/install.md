@@ -119,6 +119,7 @@ with a preauth key. Then:
 
 ```sh
 tailweave status                    # tailnets, devices, conflicts (no sudo needed)
+tailweave status home -a            # one tailnet, offline devices included
 sudo tailweave map home nas         # give a device a pool address by hand
 sudo tailweave unmap home nas
 sudo tailweave ui                   # optional web UI on http://127.0.0.1:5250

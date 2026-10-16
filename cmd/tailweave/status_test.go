@@ -30,35 +30,58 @@ var testState = daemon.State{
 			Mapping: &weave.Mapping{Tailnet: "b", PeerID: "1", IP: netip.MustParseAddr("198.18.0.1"), Auto: true}},
 		{Tailnet: "b", PeerID: "2", Name: "peer-b2", DNSName: "peer-b2.b.lab.", Online: true,
 			RealIP: netip.MustParseAddr("100.64.0.2")},
+		{Tailnet: "b", PeerID: "3", Name: "peer-b3", DNSName: "peer-b3.b.lab.",
+			RealIP: netip.MustParseAddr("100.64.0.3"), RoutedIP: netip.MustParseAddr("100.64.0.3")},
 	},
 	Conflicts: []weave.Conflict{
 		{Kind: weave.ConflictIP, Key: "100.64.0.1", Resolved: true},
 		{Kind: weave.ConflictIP, Key: "100.64.0.2", Message: "map one of them by hand",
-			Devices: []weave.DeviceRef{{Tailnet: "a", Name: "peer-a2"}, {Tailnet: "b", Name: "peer-b2"}}},
+			Devices: []weave.DeviceRef{{Tailnet: "a", PeerID: "2", Name: "peer-a2"}, {Tailnet: "b", PeerID: "2", Name: "peer-b2"}}},
 	},
 }
 
 func TestPrintStatus(t *testing.T) {
-	var b bytes.Buffer
-	printStatus(&b, testState)
-	out := b.String()
+	status := func(o statusOptions) string {
+		var b bytes.Buffer
+		printStatus(&b, testState, o)
+		return b.String()
+	}
+	out := status(statusOptions{})
 	for _, want := range []string{
-		"auto-mapping on, DNS on 100.100.100.100, pool 198.18.0.0/15",
+		"auto-mapping on, DNS on 100.100.100.100, pool 198.18.0.0/15, 1 unresolved conflict\n" +
+			"  ip 100.64.0.2: peer-a2 (a), peer-b2 (b): map one of them by hand\n",
 		"dut-a",
 		"connection refused",
 		"log in at http://hs/register/x",
-		"peer-b1 (offline)",
-		"198.18.0.1",
-		"auto",
-		"not routed",
-		"ip 100.64.0.2: peer-a2 (a), peer-b2 (b): map one of them by hand",
+		"\nb  Down        -      -      -           connection refused\n",
+		"1 of 1 online",
+		"  peer-a1  100.64.0.1\n",
+		"  peer-b1  198.18.0.1 ← 100.64.0.1  auto, offline\n",
+		"  peer-b2  100.64.0.2               not routed, same IP as peer-a2 (a)\n",
+		"  … 1 offline, show with -a\n",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("status lacks %q:\n%s", want, out)
 		}
 	}
-	if strings.Contains(out, "100.64.0.1:") {
-		t.Errorf("resolved conflict listed:\n%s", out)
+	for _, unwanted := range []string{"100.64.0.1:", "peer-b3", "\x1b["} {
+		if strings.Contains(out, unwanted) {
+			t.Errorf("status shows %q:\n%s", unwanted, out)
+		}
+	}
+
+	if out := status(statusOptions{all: true}); !strings.Contains(out, "  peer-b3  100.64.0.3               offline\n") {
+		t.Errorf("status -a lacks peer-b3:\n%s", out)
+	}
+	out = status(statusOptions{tailnet: "a"})
+	if strings.Contains(out, "peer-b1") || !strings.Contains(out, "peer-a1") || !strings.Contains(out, "1 unresolved conflict") {
+		t.Errorf("status a:\n%s", out)
+	}
+	if out := status(statusOptions{tailnet: "c"}); !strings.Contains(out, "no conflicts") {
+		t.Errorf("status c shows conflicts of other tailnets:\n%s", out)
+	}
+	if out := status(statusOptions{color: true}); !strings.Contains(out, "\x1b[31m100.64.0.2\x1b[0m") {
+		t.Errorf("status without color:\n%q", out)
 	}
 }
 

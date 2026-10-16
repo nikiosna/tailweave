@@ -5,66 +5,232 @@ import (
 	"fmt"
 	"io"
 	"net/netip"
+	"slices"
 	"strings"
-	"text/tabwriter"
+	"unicode/utf8"
 
 	"github.com/Nikiosna/tailweave/internal/client"
 	"github.com/Nikiosna/tailweave/internal/daemon"
 	"github.com/Nikiosna/tailweave/internal/weave"
 )
 
-// printStatus writes the daemon's state as tables.
-func printStatus(w io.Writer, s daemon.State) {
-	tw := tabwriter.NewWriter(w, 0, 4, 2, ' ', 0)
-	fmt.Fprintf(tw, "auto-mapping %s, DNS on %s, pool %s", onOff(s.AutoMap), s.DNS, s.Pool)
+// statusOptions select what printStatus shows.
+type statusOptions struct {
+	all     bool   // also offline devices that are routed at their real IP
+	tailnet string // only this tailnet, if set
+	color   bool   // ANSI colors
+}
+
+// ANSI styles.
+const (
+	bold   = "1"
+	dim    = "2"
+	red    = "31"
+	yellow = "33"
+)
+
+// printStatus writes the daemon's state, grouped by tailnet. Devices show their real
+// IP only where it differs from the one they are reachable at; offline devices without
+// a mapping are only counted unless o.all is set.
+func printStatus(w io.Writer, s daemon.State, o statusOptions) {
+	p := printer{w, o.color}
+	open := openConflicts(s, o.tailnet)
+	head := fmt.Sprintf("auto-mapping %s, DNS on %s, pool %s", onOff(s.AutoMap), s.DNS, s.Pool)
 	if s.Operator != nil {
-		fmt.Fprintf(tw, ", operator %s", s.Operator.Name)
+		head += ", operator " + s.Operator.Name
 	}
-	fmt.Fprint(tw, "\n\n")
-
-	if len(s.Tailnets) == 0 {
-		fmt.Fprintln(tw, "no tailnets yet, add one with `tailweave login <name>`")
-	} else {
-		fmt.Fprintln(tw, "TAILNET\tSTATE\tDOMAIN\tTHIS MACHINE\tIP\t")
+	switch len(open) {
+	case 0:
+		head += ", no conflicts"
+	case 1:
+		head += ", 1 unresolved conflict"
+	default:
+		head += fmt.Sprintf(", %d unresolved conflicts", len(open))
 	}
-	for _, t := range s.Tailnets {
-		note := or(t.LoginError, t.Error)
-		if t.AuthURL != "" {
-			note = "log in at " + t.AuthURL
-		}
-		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\n", t.Name, t.State, or(t.Domain, "-"), or(t.Self, "-"), ip(t.IP), note)
-	}
-
-	if len(s.Devices) > 0 {
-		fmt.Fprintln(tw, "\nTAILNET\tDEVICE\tREAL IP\tREACHABLE AT\tMAPPING")
-	}
-	for _, d := range s.Devices {
-		name := d.Name
-		if !d.Online {
-			name += " (offline)"
-		}
-		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\n", d.Tailnet, name, d.RealIP, routed(d), mapping(d))
-	}
-	tw.Flush()
-
-	var open []weave.Conflict
-	for _, c := range s.Conflicts {
-		if !c.Resolved {
-			open = append(open, c)
-		}
-	}
-	if len(open) == 0 {
-		fmt.Fprintln(w, "\nno unresolved conflicts")
-		return
-	}
-	fmt.Fprintln(w, "\nunresolved conflicts:")
+	fmt.Fprintln(w, head)
 	for _, c := range open {
 		var devs []string
 		for _, d := range c.Devices {
 			devs = append(devs, d.Name+" ("+d.Tailnet+")")
 		}
-		fmt.Fprintf(w, "  %s %s: %s: %s\n", c.Kind, c.Key, strings.Join(devs, ", "), c.Message)
+		p.line(red, "  %s %s: %s: %s", c.Kind, c.Key, strings.Join(devs, ", "), c.Message)
 	}
+	if len(s.Tailnets) == 0 {
+		fmt.Fprintln(w, "\nno tailnets yet, add one with `tailweave login <name>`")
+		return
+	}
+
+	type group struct {
+		head    row
+		devices []row
+		hidden  int
+	}
+	var groups []group
+	var heads, devices []row
+	for _, t := range s.Tailnets {
+		if o.tailnet != "" && t.Name != o.tailnet {
+			continue
+		}
+		var g group
+		total, online := 0, 0
+		for _, d := range s.Devices {
+			if d.Tailnet != t.Name {
+				continue
+			}
+			total++
+			if d.Online {
+				online++
+			} else if !o.all && d.Mapping == nil && d.RoutedIP == d.RealIP {
+				g.hidden++
+				continue
+			}
+			g.devices = append(g.devices, deviceRow(d, open))
+		}
+		state := cell{or(t.State, "-"), ""}
+		if t.State != "Running" {
+			state.style = yellow
+		}
+		var note cell
+		switch {
+		case t.AuthURL != "":
+			note = cell{"log in at " + t.AuthURL, yellow}
+		case t.LoginError != "" || t.Error != "":
+			note = cell{or(t.LoginError, t.Error), red}
+		case total > 0:
+			note = cell{fmt.Sprintf("%d of %d online", online, total), dim}
+		}
+		g.head = row{{t.Name, bold}, state, {or(t.Domain, "-"), ""}, {or(t.Self, "-"), ""}, {ip(t.IP), ""}, note}
+		groups = append(groups, g)
+		heads = append(heads, g.head)
+		devices = append(devices, g.devices...)
+	}
+	hw, dw := widths(heads), widths(devices)
+	for _, g := range groups {
+		fmt.Fprintln(w)
+		p.row("", g.head, hw)
+		for _, r := range g.devices {
+			p.row("  ", r, dw)
+		}
+		if g.hidden > 0 {
+			p.line(dim, "  … %d offline, show with -a", g.hidden)
+		}
+	}
+}
+
+// deviceRow shows a device's name, the IP it is reachable at and what is special about it.
+func deviceRow(d weave.Device, open []weave.Conflict) row {
+	name, addr := cell{d.Name, ""}, cell{d.RealIP.String(), ""}
+	var notes []string
+	style := ""
+	switch {
+	case !d.RoutedIP.IsValid():
+		addr.style, style = red, red
+		notes = append(notes, notRouted(d, open))
+	case d.RoutedIP != d.RealIP:
+		addr = cell{d.RoutedIP.String() + " ← " + d.RealIP.String(), yellow}
+		if d.Mapping != nil {
+			notes = append(notes, mapping(d))
+		}
+	}
+	if !d.Online {
+		name.style = dim
+		if addr.style == "" {
+			addr.style = dim
+		}
+		notes = append(notes, "offline")
+		if style == "" {
+			style = dim
+		}
+	}
+	return row{name, addr, {strings.Join(notes, ", "), style}}
+}
+
+// notRouted explains why a device is not reachable, from the conflict it is part of.
+func notRouted(d weave.Device, open []weave.Conflict) string {
+	for _, c := range open {
+		var others []string
+		found := false
+		for _, r := range c.Devices {
+			if r.Tailnet == d.Tailnet && r.PeerID == d.PeerID {
+				found = true
+			} else {
+				others = append(others, r.Name+" ("+r.Tailnet+")")
+			}
+		}
+		switch {
+		case !found:
+		case c.Kind == weave.ConflictIP && len(others) > 0:
+			return "not routed, same IP as " + strings.Join(others, ", ")
+		case c.Message != "":
+			return "not routed: " + c.Message
+		}
+	}
+	return "not routed"
+}
+
+// openConflicts returns the unresolved conflicts, only those involving tailnet if set.
+func openConflicts(s daemon.State, tailnet string) []weave.Conflict {
+	var open []weave.Conflict
+	for _, c := range s.Conflicts {
+		if c.Resolved {
+			continue
+		}
+		if tailnet != "" && !slices.ContainsFunc(c.Devices, func(d weave.DeviceRef) bool { return d.Tailnet == tailnet }) {
+			continue
+		}
+		open = append(open, c)
+	}
+	return open
+}
+
+type cell struct{ text, style string }
+
+type row []cell
+
+// widths returns the width of each column but the last, which needs no padding.
+func widths(rows []row) []int {
+	var w []int
+	for _, r := range rows {
+		for i, c := range r[:len(r)-1] {
+			if i == len(w) {
+				w = append(w, 0)
+			}
+			w[i] = max(w[i], utf8.RuneCountInString(c.text))
+		}
+	}
+	return w
+}
+
+// printer writes aligned rows, colored if wanted. It pads by hand because tabwriter
+// would count the escape sequences as text.
+type printer struct {
+	w     io.Writer
+	color bool
+}
+
+func (p printer) paint(style, s string) string {
+	if !p.color || style == "" || s == "" {
+		return s
+	}
+	return "\x1b[" + style + "m" + s + "\x1b[0m"
+}
+
+func (p printer) row(indent string, r row, w []int) {
+	var b strings.Builder
+	b.WriteString(indent)
+	for i, c := range r {
+		if i < len(r)-1 {
+			pad := w[i] - utf8.RuneCountInString(c.text) + 2
+			b.WriteString(p.paint(c.style, c.text) + strings.Repeat(" ", pad))
+		} else {
+			b.WriteString(p.paint(c.style, c.text))
+		}
+	}
+	fmt.Fprintln(p.w, strings.TrimRight(b.String(), " "))
+}
+
+func (p printer) line(style, format string, args ...any) {
+	fmt.Fprintln(p.w, p.paint(style, fmt.Sprintf(format, args...)))
 }
 
 func routed(d weave.Device) string {
@@ -107,13 +273,7 @@ func ip(a netip.Addr) string {
 }
 
 func unresolved(s daemon.State) int {
-	n := 0
-	for _, c := range s.Conflicts {
-		if !c.Resolved {
-			n++
-		}
-	}
-	return n
+	return len(openConflicts(s, ""))
 }
 
 // findDevice looks a device up by name or peer ID in the daemon's current state.
