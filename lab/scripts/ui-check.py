@@ -46,8 +46,8 @@ with sync_playwright() as p:
 
     check("auto-mapped name", resolve(name), b1["routedIP"])
 
-    row = page.locator("#devices tr", has_text=b1["dnsName"])
-    row.get_by_role("button", name="Map to…").click()
+    row = page.locator("#devices tr", has_text=name)
+    row.get_by_role("button", name="Map IP").click()
     page.fill("#mapip", "198.18.0.42")
     page.get_by_role("button", name="Map", exact=True).click()
     expect(row).to_contain_text("198.18.0.42")
@@ -56,23 +56,23 @@ with sync_playwright() as p:
     check("manually mapped name", resolve(name), "198.18.0.42")
 
     row = page.locator("#devices tr", has_text="peer-b2")
-    row.get_by_role("button", name="Map to…").click()
+    row.get_by_role("button", name="Map IP").click()
     page.fill("#mapip", device("peer-a1")["realIP"])
     page.get_by_role("button", name="Map", exact=True).click()
     expect(page.locator("#msg")).to_contain_text("not free")
     page.keyboard.press("Escape")
 
-    page.locator("#devices tr", has_text=b1["dnsName"]).get_by_role("button", name="Unmap").click()
-    expect(page.locator("#devices tr", has_text=b1["dnsName"])).to_contain_text("auto-mapped")
+    page.locator("#devices tr", has_text=name).get_by_role("button", name="Unmap").click()
+    expect(page.locator("#devices tr", has_text=name)).to_contain_text("auto-mapped")
 
     page.uncheck("#automap")
-    expect(page.locator("#devices tr", has_text=b1["dnsName"])).to_contain_text("not routed")
+    expect(page.locator("#devices tr", has_text=name)).to_contain_text("not routed")
     expect(page.locator(".conflict:not(.resolved)").first).to_be_visible()
     page.screenshot(path=f"{out}/3-automap-off.png", full_page=True)
     check("name without route", resolve(name), None)
 
     page.check("#automap")
-    expect(page.locator("#devices tr", has_text=b1["dnsName"])).to_contain_text("auto-mapped")
+    expect(page.locator("#devices tr", has_text=name)).to_contain_text("auto-mapped")
 
     mobile = browser.new_page(viewport={"width": 390, "height": 844})
     mobile.goto(UI)

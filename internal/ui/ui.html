@@ -129,13 +129,13 @@ function render() {
       actions = `<input type="text" id="mapip" value="${esc(s.suggestion)}" placeholder="IP">
         <button class="primary" data-save="${esc(key)}">Map</button> <button data-cancel>Cancel</button>`;
     } else {
-      actions = `<button data-edit="${esc(key)}">Map to…</button>` +
+      actions = `<button data-edit="${esc(key)}">Map IP</button>` +
         (d.mapping ? ` <button data-unmap="${esc(key)}">Unmap</button>` : "");
     }
     return `<tr>
       <td><span class="dot ${d.online ? "on" : ""}"></span>${esc(d.name)}</td>
       <td>${esc(d.tailnet)}</td>
-      <td class="mono">${esc(d.dnsName)}</td>
+      <td class="mono">${esc((d.dnsName || "").replace(/\.$/, ""))}</td>
       <td class="mono">${esc(d.realIP)}</td>
       <td>${at}</td>
       <td>${actions}</td></tr>`;
