@@ -106,7 +106,7 @@ func (d *Daemon) Run(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	srv := &http.Server{Handler: d.Handler(), ReadHeaderTimeout: 5 * time.Second}
+	srv := &http.Server{Handler: d.Handler(), ConnContext: connContext, ReadHeaderTimeout: 5 * time.Second}
 	go func() {
 		if err := srv.Serve(ln); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			slog.Error("api", "err", err)
@@ -154,7 +154,8 @@ func (d *Daemon) claims() preflight.Claims {
 	return c
 }
 
-// listenUnix listens on a Unix socket only root can use, replacing a stale one.
+// listenUnix listens on a Unix socket every user can connect to, replacing a stale one.
+// The API checks who is calling (guard).
 func listenUnix(path string) (net.Listener, error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return nil, err
@@ -166,7 +167,7 @@ func listenUnix(path string) (net.Listener, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err := os.Chmod(path, 0o600); err != nil {
+	if err := os.Chmod(path, 0o666); err != nil {
 		ln.Close()
 		return nil, err
 	}

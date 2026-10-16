@@ -72,6 +72,7 @@ ifeq ($(OS),Darwin)
 		echo; echo "Installed. Start the service (and at every boot):"; \
 		echo "  sudo launchctl bootstrap system $(LAUNCHD_PLIST:$(DESTDIR)%=%)"; \
 		echo "Logs: /var/log/tailweave.log. Then add a tailnet: sudo tailweave login <name>"; \
+		echo "Without sudo after that: sudo tailweave set -operator=<your user>"; \
 	fi
 else
 	install -d $(dir $(SYSTEMD_UNIT))
@@ -85,6 +86,7 @@ else
 		echo; echo "Installed. Start the service (and at every boot):"; \
 		echo "  sudo systemctl enable --now tailweave"; \
 		echo "Logs: journalctl -u tailweave -f. Then add a tailnet: sudo tailweave login <name>"; \
+		echo "Without sudo after that: sudo tailweave set -operator=<your user>"; \
 	fi
 endif
 

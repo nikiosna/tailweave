@@ -13,6 +13,7 @@ import (
 	"net/netip"
 	"os"
 	"os/exec"
+	"os/user"
 	"path/filepath"
 	"strings"
 	"syscall"
@@ -367,14 +368,20 @@ func startTailweave(t *testing.T, dir string) tailweave {
 	}
 	t.Cleanup(func() { stop(t) })
 
-	// The socket is root's only; open it up so the test's own client can use it.
-	for i := 0; exec.Command("sudo", "-n", "chmod", "0666", sock).Run() != nil; i++ {
+	for i := 0; exec.Command("test", "-S", sock).Run() != nil; i++ {
 		if i == 30 {
 			t.Fatalf("no API socket at %s:\n%s", sock, log.String())
 		}
 		time.Sleep(time.Second)
 	}
-	return tailweave{Client: client.New(sock), bin: bin, dir: dir, stop: stop}
+	tw := tailweave{Client: client.New(sock), bin: bin, dir: dir, stop: stop}
+	// The test's own client is not root; as the operator it may change tailweave.
+	me, err := user.Current()
+	if err != nil {
+		t.Fatal(err)
+	}
+	tw.cli(t, "set", "-operator="+me.Username)
+	return tw
 }
 
 // setupTailweave builds tailweave unless $TAILWEAVE_BIN names a binary and writes a

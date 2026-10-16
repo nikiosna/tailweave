@@ -16,7 +16,11 @@ import (
 // printStatus writes the daemon's state as tables.
 func printStatus(w io.Writer, s daemon.State) {
 	tw := tabwriter.NewWriter(w, 0, 4, 2, ' ', 0)
-	fmt.Fprintf(tw, "auto-mapping %s, DNS on %s, pool %s\n\n", onOff(s.AutoMap), s.DNS, s.Pool)
+	fmt.Fprintf(tw, "auto-mapping %s, DNS on %s, pool %s", onOff(s.AutoMap), s.DNS, s.Pool)
+	if s.Operator != nil {
+		fmt.Fprintf(tw, ", operator %s", s.Operator.Name)
+	}
+	fmt.Fprint(tw, "\n\n")
 
 	if len(s.Tailnets) == 0 {
 		fmt.Fprintln(tw, "no tailnets yet, add one with `tailweave login <name>`")

@@ -23,6 +23,7 @@ With Go 1.27 and make, on Linux or macOS:
 make && sudo make install
 sudo tailweave run            # or start the service: see docs/install.md
 sudo tailweave login <name>   # in a second terminal: add a tailnet
+sudo tailweave set -operator=$USER   # optional: then login, map etc. work without sudo
 ```
 
 Requirements, the service, configuration, first steps and known limitations:

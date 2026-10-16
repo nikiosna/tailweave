@@ -91,6 +91,7 @@ type state struct {
 	AutoMap  bool            `json:"autoMap"`
 	Tailnets []tailnetEntry  `json:"tailnets"` // in priority order: the first keeps colliding IPs
 	Mappings []weave.Mapping `json:"mappings"`
+	Operator *Operator       `json:"operator,omitempty"`
 }
 
 // tailnetEntry is a tailnet added with `tailweave login`.

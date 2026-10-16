@@ -18,9 +18,12 @@ import (
 	"net/http"
 	"net/netip"
 	"os"
+	"os/exec"
 	"os/signal"
+	"os/user"
 	"slices"
 	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
@@ -41,13 +44,16 @@ commands:
   remove <tailnet>                   log out and forget the tailnet
   status [-json]                     tailnets, devices and conflicts
   set -auto-map=<true|false>         remap colliding devices automatically or not
+  set -operator=<user>               let a user change tailweave without sudo
+                                     (root only; -operator= removes it)
   map <tailnet> <device> [<ip>]      route a device at an IP (default: a free pool address)
   unmap <tailnet> <device>           remove a device's mapping
   ui [-listen <addr>]                serve a web UI for the running daemon
   version                            print the version
 
-All commands except version need root. The commands talking to the daemon take
--socket <path> (default ` + daemon.DefaultSocket + `).
+run needs root. Every user may run status; the other commands need root or the
+operator. The commands talking to the daemon take -socket <path> (default
+` + daemon.DefaultSocket + `).
 `
 
 // errUsage makes main print the usage and exit with status 2.
@@ -182,18 +188,58 @@ func set(ctx context.Context, args []string) error {
 		autoMap = &b
 		return err
 	})
+	var operator *string
+	fs.Func("operator", "user who may change tailweave without sudo (empty: nobody)", func(v string) error {
+		operator = &v
+		return nil
+	})
 	if err := parse(fs, args); err != nil {
 		return err
 	}
-	if autoMap == nil {
+	if autoMap == nil && operator == nil {
 		return errUsage
 	}
-	s, err := client.New(*socket).SetAutoMap(ctx, *autoMap)
-	if err != nil {
-		return err
+	c := client.New(*socket)
+	if operator != nil {
+		op := daemon.Operator{Name: *operator}
+		if op.Name != "" {
+			uid, err := lookupUID(op.Name)
+			if err != nil {
+				return err
+			}
+			op.UID = uid
+		}
+		s, err := c.SetOperator(ctx, op)
+		if err != nil {
+			return err
+		}
+		if s.Operator == nil {
+			fmt.Println("no operator; only root may change tailweave")
+		} else {
+			fmt.Printf("operator %s (uid %d) may change tailweave without sudo\n", s.Operator.Name, s.Operator.UID)
+		}
 	}
-	fmt.Printf("auto-mapping %s, %d unresolved conflicts\n", onOff(s.AutoMap), unresolved(s))
+	if autoMap != nil {
+		s, err := c.SetAutoMap(ctx, *autoMap)
+		if err != nil {
+			return err
+		}
+		fmt.Printf("auto-mapping %s, %d unresolved conflicts\n", onOff(s.AutoMap), unresolved(s))
+	}
 	return nil
+}
+
+// lookupUID returns the user ID of a user name. Without cgo, os/user only reads
+// /etc/passwd, which on macOS lacks the regular users, so it falls back to id(1).
+func lookupUID(name string) (int, error) {
+	if u, err := user.Lookup(name); err == nil {
+		return strconv.Atoi(u.Uid)
+	}
+	out, err := exec.Command("id", "-u", "--", name).Output()
+	if err != nil {
+		return 0, fmt.Errorf("unknown user %q", name)
+	}
+	return strconv.Atoi(strings.TrimSpace(string(out)))
 }
 
 func mapDevice(ctx context.Context, args []string) error {

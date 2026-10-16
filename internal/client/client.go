@@ -45,7 +45,13 @@ func (c *Client) State(ctx context.Context) (daemon.State, error) {
 
 // SetAutoMap turns automatic remapping of colliding devices on or off.
 func (c *Client) SetAutoMap(ctx context.Context, on bool) (daemon.State, error) {
-	return c.do(ctx, http.MethodPut, "/api/options", map[string]bool{"autoMap": on})
+	return c.do(ctx, http.MethodPut, "/api/options", daemon.Options{AutoMap: &on})
+}
+
+// SetOperator lets the user op change tailweave without root; an empty name removes the
+// operator. Only root may call it.
+func (c *Client) SetOperator(ctx context.Context, op daemon.Operator) (daemon.State, error) {
+	return c.do(ctx, http.MethodPut, "/api/options", daemon.Options{Operator: &op})
 }
 
 // Map routes a device at ip; without a valid ip the daemon picks a free pool address.
@@ -94,7 +100,7 @@ func (c *Client) do(ctx context.Context, method, path string, body any) (daemon.
 	if err != nil {
 		var op *net.OpError
 		if errors.As(err, &op) && op.Op == "dial" {
-			return s, fmt.Errorf("tailweave is not reachable at %s (is `tailweave run` running, are you root?): %w", c.Socket, op.Err)
+			return s, fmt.Errorf("tailweave is not reachable at %s (is `tailweave run` running?): %w", c.Socket, op.Err)
 		}
 		return s, err
 	}

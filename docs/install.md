@@ -4,7 +4,9 @@
 > network setup is no disaster, and expect rough edges.
 
 tailweave is a single binary, `tailweave`. `tailweave run` is the daemon; every other
-command controls it. All commands except `tailweave version` need root.
+command controls it. `tailweave run` needs root. Every user on the machine may run
+`tailweave status`; the commands that change something need root or the operator, a
+user you allow once with `sudo tailweave set -operator=$USER`.
 
 ## Requirements
 
@@ -93,6 +95,12 @@ kept in the state directory.
 
 ## First steps
 
+To drop the `sudo` in the commands below, make yourself the operator once:
+
+```sh
+sudo tailweave set -operator=$USER    # -operator= removes it again
+```
+
 Add a tailnet on Tailscale's control server. Without a key, `login` prints a link; open
 it in a browser and sign in:
 
@@ -110,7 +118,7 @@ Instead of the web link, `-auth-key file:<path>` (or `-auth-key -` for stdin) lo
 with a preauth key. Then:
 
 ```sh
-sudo tailweave status               # tailnets, devices, conflicts
+tailweave status                    # tailnets, devices, conflicts (no sudo needed)
 sudo tailweave map home nas         # give a device a pool address by hand
 sudo tailweave unmap home nas
 sudo tailweave ui                   # optional web UI on http://127.0.0.1:5250

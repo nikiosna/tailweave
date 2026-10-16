@@ -24,9 +24,13 @@ no personal paths. Commit locally only; pushing is done by the maintainer.
      systemd-resolved for the tailnet domains; names resolve to the routed IP
    - [x] Daemon + CLI (`tailweave run`, `internal/daemon`): peers, conflicts,
      auto-mapping toggle, manual mappings
-   - [x] CLI first: API only on a Unix socket (`/run/tailweave/tailweave.sock`, root),
+   - [x] CLI first: API only on a Unix socket (`/run/tailweave/tailweave.sock`),
      `tailweave status|set|map|unmap` via `internal/client`; the web UI (`internal/ui`)
      runs only on demand with `tailweave ui`
+   - [x] No sudo for daily use: the socket is open to all users, the daemon checks the
+     caller's peer credentials; everyone may read (without pending login URLs), changes
+     need root or the operator (`sudo tailweave set -operator=$USER`, kept in the state)
+     (`TestAccess`; lab tests run their client as the operator)
    - [x] Daemon manages the instances itself (`internal/instance`): `tailweave login`
      creates namespace `tailweave-<name>`, veth `twh<i>`/`twn<i>` from 10.201.0.0/16 and a
      supervised tailscaled, and logs in with a preauth key (`-auth-key <key>|file:|-`);

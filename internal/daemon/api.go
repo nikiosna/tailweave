@@ -21,6 +21,7 @@ type State struct {
 	Devices    []weave.Device   `json:"devices"`
 	Conflicts  []weave.Conflict `json:"conflicts"`
 	Mappings   []weave.Mapping  `json:"mappings"`
+	Operator   *Operator        `json:"operator,omitempty"`
 }
 
 // TailnetState is a tailnet's own status.
@@ -28,7 +29,7 @@ type TailnetState struct {
 	Name        string     `json:"name"`
 	LoginServer string     `json:"loginServer"`
 	State       string     `json:"state"`             // Running, NeedsLogin, Starting, Down, LoggedOut, ...
-	AuthURL     string     `json:"authURL,omitempty"` // open it to complete a pending login
+	AuthURL     string     `json:"authURL,omitempty"` // open it to complete a pending login; only for root and the operator
 	Domain      string     `json:"domain"`
 	Self        string     `json:"self"` // this machine's name in the tailnet
 	IP          netip.Addr `json:"ip"`   // this machine's IP in the tailnet
@@ -43,22 +44,42 @@ type MappingRequest struct {
 	IP      netip.Addr `json:"ip"`
 }
 
-// Handler serves the JSON API used by the CLI and by `tailweave ui`.
+// Options is the body of PUT /api/options; fields left out stay as they are.
+type Options struct {
+	AutoMap *bool `json:"autoMap,omitempty"`
+	// Operator replaces the operator; one without a name removes it. Only root may set it.
+	Operator *Operator `json:"operator,omitempty"`
+}
+
+// Handler serves the JSON API used by the CLI and by `tailweave ui`. Everyone may read,
+// only root and the operator may change anything.
 func (d *Daemon) Handler() http.Handler {
 	mux := http.NewServeMux()
-	mux.HandleFunc("GET /api/state", func(w http.ResponseWriter, _ *http.Request) {
-		writeJSON(w, d.State())
+	mux.HandleFunc("GET /api/state", func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, d.stateFor(r))
 	})
 	mux.HandleFunc("PUT /api/options", func(w http.ResponseWriter, r *http.Request) {
-		var o struct {
-			AutoMap *bool `json:"autoMap"`
-		}
+		var o Options
 		if !readJSON(w, r, &o) {
+			return
+		}
+		if o.Operator != nil && !isRoot(r) {
+			http.Error(w, "only root may set the operator", http.StatusForbidden)
 			return
 		}
 		d.change(w, r, func() error {
 			if o.AutoMap != nil {
 				d.st.AutoMap = *o.AutoMap
+			}
+			if o.Operator != nil {
+				d.st.Operator = nil
+				if o.Operator.Name != "" {
+					if o.Operator.UID <= 0 {
+						return fmt.Errorf("operator %q needs a user ID other than root's", o.Operator.Name)
+					}
+					op := *o.Operator
+					d.st.Operator = &op
+				}
 			}
 			return nil
 		})
@@ -96,7 +117,20 @@ func (d *Daemon) Handler() http.Handler {
 			return nil
 		})
 	})
-	return mux
+	return d.guard(mux)
+}
+
+// stateFor returns the state as the caller of r may see it: a pending login URL would let
+// anyone who opens it decide whose account the machine joins, so only root and the
+// operator get it.
+func (d *Daemon) stateFor(r *http.Request) State {
+	s := d.State()
+	if !d.mayChange(r) {
+		for i := range s.Tailnets {
+			s.Tailnets[i].AuthURL = ""
+		}
+	}
+	return s
 }
 
 // State returns a snapshot of the merged tailnets.
@@ -111,6 +145,7 @@ func (d *Daemon) State() State {
 		Devices:    d.plan.Devices,
 		Conflicts:  d.plan.Conflicts,
 		Mappings:   d.st.Mappings,
+		Operator:   d.st.Operator,
 	}
 	for _, e := range d.st.Tailnets {
 		tn, st := d.tailnets[e.Name], d.status[e.Name]
@@ -201,7 +236,7 @@ func (d *Daemon) answer(w http.ResponseWriter, r *http.Request, err error) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	writeJSON(w, d.State())
+	writeJSON(w, d.stateFor(r))
 }
 
 func or(s, def string) string {
