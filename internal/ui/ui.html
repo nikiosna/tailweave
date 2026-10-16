@@ -163,7 +163,11 @@ $("automap").addEventListener("change", e => act("PUT", "/api/options", {autoMap
 
 async function poll() {
   try {
-    if (!editing) { state = await api("GET", "/api/state"); render(); }
+    if (editing) return;
+    const next = await api("GET", "/api/state");
+    // Rendering replaces the DOM, which would drop a text selection the user is about to copy.
+    if (JSON.stringify(next) === JSON.stringify(state) || !document.getSelection().isCollapsed) return;
+    state = next; render();
   } catch (e) { $("msg").textContent = "tailweave not reachable: " + e.message; }
 }
 poll();
