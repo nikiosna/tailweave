@@ -48,7 +48,9 @@ commands:
   set -operator=<user>               let a user change tailweave without sudo
                                      (root only; -operator= removes it)
   map <tailnet> <device> [<ip>]      route a device at an IP (default: a free pool address)
-  unmap <tailnet> <device>           remove a device's mapping
+  map <tailnet> <route> [<prefix>]   route a subnet route, e.g. 10.0.0.0/24, at a prefix
+                                     of the same size (default: a free pool block)
+  unmap <tailnet> <device>|<route>   remove a device's or a route's mapping
   ui [-listen <addr>]                serve a web UI for the running daemon
   version                            print the version
 
@@ -262,6 +264,20 @@ func mapDevice(ctx context.Context, args []string) error {
 	if err := parse(fs, args, 2, 3); err != nil {
 		return err
 	}
+	if route, err := netip.ParsePrefix(fs.Arg(1)); err == nil {
+		var to netip.Prefix
+		if fs.NArg() == 3 {
+			if to, err = netip.ParsePrefix(fs.Arg(2)); err != nil {
+				return err
+			}
+		}
+		s, err := client.New(*socket).MapRoute(ctx, fs.Arg(0), route, to)
+		if err != nil {
+			return err
+		}
+		printRoute(s, fs.Arg(0), route)
+		return nil
+	}
 	var ip netip.Addr
 	if fs.NArg() == 3 {
 		var err error
@@ -290,6 +306,14 @@ func unmapDevice(ctx context.Context, args []string) error {
 		return err
 	}
 	c := client.New(*socket)
+	if route, err := netip.ParsePrefix(fs.Arg(1)); err == nil {
+		s, err := c.UnmapRoute(ctx, fs.Arg(0), route)
+		if err != nil {
+			return err
+		}
+		printRoute(s, fs.Arg(0), route)
+		return nil
+	}
 	dev, err := findDevice(ctx, c, fs.Arg(0), fs.Arg(1))
 	if err != nil {
 		return err

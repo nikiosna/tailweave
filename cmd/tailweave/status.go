@@ -85,6 +85,9 @@ func printStatus(w io.Writer, s daemon.State, o statusOptions) {
 				continue
 			}
 			g.devices = append(g.devices, deviceRow(d, open))
+			for _, r := range d.Routes {
+				g.devices = append(g.devices, routeRow(d, r, open))
+			}
 		}
 		state := cell{or(t.State, "-"), ""}
 		if t.State != "Running" {
@@ -143,6 +146,53 @@ func deviceRow(d weave.Device, open []weave.Conflict) row {
 		}
 	}
 	return row{name, addr, {strings.Join(notes, ", "), style}}
+}
+
+// routeRow shows a subnet route of a device below it: the prefix it is reachable at and
+// what is special about it.
+func routeRow(d weave.Device, r weave.Route, open []weave.Conflict) row {
+	addr, note := cell{r.Prefix.String(), ""}, cell{"route", ""}
+	switch {
+	case !r.Routed.IsValid():
+		addr.style, note.style = red, red
+		note.text += ", " + routeNotRouted(d, r, open)
+	case r.Routed != r.Prefix:
+		addr = cell{r.Routed.String() + " ← " + r.Prefix.String(), yellow}
+		if r.Mapping != nil && r.Mapping.Auto {
+			note.text += ", auto"
+		} else if r.Mapping != nil {
+			note.text += ", manual"
+		}
+	}
+	if !d.Online && addr.style == "" {
+		addr.style, note.style = dim, dim
+	}
+	return row{{"", ""}, addr, note}
+}
+
+// routeNotRouted explains why a subnet route is not reachable.
+func routeNotRouted(d weave.Device, r weave.Route, open []weave.Conflict) string {
+	for _, c := range open {
+		key, err := netip.ParsePrefix(c.Key)
+		if err != nil || !key.Overlaps(r.Prefix) ||
+			!slices.ContainsFunc(c.Devices, func(x weave.DeviceRef) bool { return x.Tailnet == d.Tailnet && x.PeerID == d.PeerID }) {
+			continue
+		}
+		var others []string
+		for _, x := range c.Devices {
+			if x.Tailnet != d.Tailnet {
+				others = append(others, x.Name+" ("+x.Tailnet+")")
+			}
+		}
+		if c.Kind == weave.ConflictRoute && len(others) > 0 {
+			return "not routed, overlaps a route of " + strings.Join(others, ", ")
+		}
+		if strings.HasPrefix(c.Message, "not routed") {
+			return c.Message
+		}
+		return "not routed: " + c.Message
+	}
+	return "not routed"
 }
 
 // notRouted explains why a device is not reachable, from the conflict it is part of.
@@ -305,6 +355,22 @@ func pickDevice(s daemon.State, tailnet, device string) (weave.Device, error) {
 		return found[0], nil
 	default:
 		return weave.Device{}, fmt.Errorf("%d devices named %q in tailnet %q, use the MagicDNS name", len(found), device, tailnet)
+	}
+}
+
+// printRoute tells where a tailnet's subnet route is reachable now.
+func printRoute(s daemon.State, tailnet string, route netip.Prefix) {
+	for _, d := range s.Devices {
+		for _, r := range d.Routes {
+			if d.Tailnet == tailnet && r.Prefix == route.Masked() {
+				at := "not routed"
+				if r.Routed.IsValid() {
+					at = r.Routed.String()
+				}
+				fmt.Printf("route %s of %s (%s) is reachable at %s\n", r.Prefix, d.Name, tailnet, at)
+				return
+			}
+		}
 	}
 }
 

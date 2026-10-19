@@ -124,6 +124,10 @@ func (m *Manager) Start(name string, index int) (*Instance, error) {
 	go i.supervise(ctx)
 	for range 100 {
 		if fi, err := os.Stat(i.Socket); err == nil && fi.Mode()&os.ModeSocket != 0 {
+			// Tailnets logged in by an older tailweave still have subnet routes off.
+			if err := run("tailscale", "--socket="+i.Socket, "set", "--accept-routes=true", "--accept-dns=false"); err != nil {
+				slog.Warn("cannot turn on subnet routes", "tailnet", name, "err", err)
+			}
 			return i, nil
 		}
 		time.Sleep(100 * time.Millisecond)
@@ -146,6 +150,10 @@ func (i *Instance) setupNetns() error {
 		{"-n", i.Netns, "link", "set", nsIf, "up"},
 		{"-n", i.Netns, "link", "set", "lo", "up"},
 		{"-n", i.Netns, "route", "add", "default", "via", i.HostIP.String()},
+		// Subnet routes go to tailscaled's table 52, which is consulted before main. This
+		// keeps the veth's own network out of their reach; only the default route is left
+		// to them.
+		{"-n", i.Netns, "rule", "add", "pref", "5200", "lookup", "main", "suppress_prefixlength", "0"},
 	} {
 		if err := run("ip", args...); err != nil {
 			return err
@@ -232,7 +240,7 @@ type Login = tailnet.Login
 // login URL in its status; the login completes when the user has followed it. A failed
 // attempt is reported by LoginError. An earlier attempt still waiting is cancelled.
 func (i *Instance) Up(l Login) error {
-	args := []string{"--socket=" + i.Socket, "up", "--reset", "--accept-dns=false", "--accept-routes=false",
+	args := []string{"--socket=" + i.Socket, "up", "--reset", "--accept-dns=false", "--accept-routes=true",
 		"--login-server=" + l.LoginServer, "--hostname=" + l.Hostname}
 	var keyFile string
 	if l.AuthKey != "" {

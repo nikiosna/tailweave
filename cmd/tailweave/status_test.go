@@ -32,11 +32,22 @@ var testState = daemon.State{
 			RealIP: netip.MustParseAddr("100.64.0.2")},
 		{Tailnet: "b", PeerID: "3", Name: "peer-b3", DNSName: "peer-b3.b.lab.",
 			RealIP: netip.MustParseAddr("100.64.0.3"), RoutedIP: netip.MustParseAddr("100.64.0.3")},
+		{Tailnet: "b", PeerID: "4", Name: "router-b", Online: true,
+			RealIP: netip.MustParseAddr("100.64.0.4"), RoutedIP: netip.MustParseAddr("100.64.0.4"),
+			Routes: []weave.Route{
+				{Prefix: netip.MustParsePrefix("10.99.0.0/24"), Routed: netip.MustParsePrefix("198.18.1.0/24"),
+					Mapping: &weave.Mapping{Tailnet: "b", Route: netip.MustParsePrefix("10.99.0.0/24"),
+						Prefix: netip.MustParsePrefix("198.18.1.0/24"), Auto: true}},
+				{Prefix: netip.MustParsePrefix("192.168.1.0/24")},
+				{Prefix: netip.MustParsePrefix("10.5.0.0/16"), Routed: netip.MustParsePrefix("10.5.0.0/16")},
+			}},
 	},
 	Conflicts: []weave.Conflict{
 		{Kind: weave.ConflictIP, Key: "100.64.0.1", Resolved: true},
 		{Kind: weave.ConflictIP, Key: "100.64.0.2", Message: "map one of them by hand",
 			Devices: []weave.DeviceRef{{Tailnet: "a", PeerID: "2", Name: "peer-a2"}, {Tailnet: "b", PeerID: "2", Name: "peer-b2"}}},
+		{Kind: weave.ConflictLocal, Key: "192.168.1.0/24", Message: "not routed: overlaps a network of this machine",
+			Devices: []weave.DeviceRef{{Tailnet: "b", PeerID: "4", Name: "router-b"}}},
 	},
 }
 
@@ -48,16 +59,20 @@ func TestPrintStatus(t *testing.T) {
 	}
 	out := status(statusOptions{})
 	for _, want := range []string{
-		"auto-mapping on, DNS on 100.100.100.100, pool 198.18.0.0/15, 1 unresolved conflict\n" +
+		"auto-mapping on, DNS on 100.100.100.100, pool 198.18.0.0/15, 2 unresolved conflicts\n" +
 			"  ip 100.64.0.2: peer-a2 (a), peer-b2 (b): map one of them by hand\n",
+		"  router-b  100.64.0.4\n" +
+			"            198.18.1.0/24 ← 10.99.0.0/24  route, auto\n" +
+			"            192.168.1.0/24                route, not routed: overlaps a network of this machine\n" +
+			"            10.5.0.0/16                   route\n",
 		"dut-a",
 		"connection refused",
 		"log in at http://hs/register/x",
 		"\nb  Down        -      -      -           connection refused\n",
 		"1 of 1 online",
-		"  peer-a1  100.64.0.1\n",
-		"  peer-b1  198.18.0.1 ← 100.64.0.1  auto, offline\n",
-		"  peer-b2  100.64.0.2               not routed, same IP as peer-a2 (a)\n",
+		"  peer-a1   100.64.0.1\n",
+		"  peer-b1   198.18.0.1 ← 100.64.0.1       auto, offline\n",
+		"  peer-b2   100.64.0.2                    not routed, same IP as peer-a2 (a)\n",
 		"  … 1 offline, show with -a\n",
 	} {
 		if !strings.Contains(out, want) {
@@ -70,7 +85,7 @@ func TestPrintStatus(t *testing.T) {
 		}
 	}
 
-	if out := status(statusOptions{all: true}); !strings.Contains(out, "  peer-b3  100.64.0.3               offline\n") {
+	if out := status(statusOptions{all: true}); !strings.Contains(out, "  peer-b3   100.64.0.3                    offline\n") {
 		t.Errorf("status -a lacks peer-b3:\n%s", out)
 	}
 	out = status(statusOptions{tailnet: "a"})

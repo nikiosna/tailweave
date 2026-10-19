@@ -66,6 +66,17 @@ func HostRoutes(p weave.Plan, nss []Namespace, blocked []netip.Prefix) (string, 
 		}
 		fmt.Fprintf(&b, "route replace %s/32 via %s table %d\n", ip, g, Table)
 	}
+	for _, s := range sortedPrefixes(p.Subnets) {
+		t := p.Subnets[s]
+		if !s.Addr().Is4() {
+			continue
+		}
+		g, ok := gw[t.Tailnet]
+		if !ok {
+			return "", fmt.Errorf("no namespace for tailnet %q", t.Tailnet)
+		}
+		fmt.Fprintf(&b, "route replace %s via %s table %d\n", s, g, Table)
+	}
 	return b.String(), nil
 }
 
@@ -91,6 +102,11 @@ func NamespaceRules(p weave.Plan, ns Namespace) string {
 		routed = append(routed, t.IP)
 		if t.IP != ip {
 			fmt.Fprintf(&b, "\t\tip daddr %s dnat ip to %s\n", ip, t.IP)
+		}
+	}
+	for _, s := range sortedPrefixes(p.Subnets) {
+		if t := p.Subnets[s]; t.Tailnet == ns.Tailnet && t.Prefix != s && s.Addr().Is4() {
+			fmt.Fprintf(&b, "\t\tip daddr %s dnat ip prefix to %s\n", s, t.Prefix)
 		}
 	}
 	slices.SortFunc(routed, netip.Addr.Compare)
@@ -156,6 +172,20 @@ func HostRules(transit netip.Prefix) string {
 	fmt.Fprintf(&b, "\t\toifname \"%s*\" drop\n", VethPrefix)
 	b.WriteString("\t}\n}\n")
 	return b.String()
+}
+
+func sortedPrefixes(m map[netip.Prefix]weave.SubnetTarget) []netip.Prefix {
+	ps := make([]netip.Prefix, 0, len(m))
+	for p := range m {
+		ps = append(ps, p)
+	}
+	slices.SortFunc(ps, func(a, b netip.Prefix) int {
+		if c := a.Addr().Compare(b.Addr()); c != 0 {
+			return c
+		}
+		return a.Bits() - b.Bits()
+	})
+	return ps
 }
 
 func sortedIPs(m map[netip.Addr]weave.Target) []netip.Addr {

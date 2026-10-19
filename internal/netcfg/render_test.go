@@ -8,13 +8,18 @@ import (
 	"github.com/Nikiosna/tailweave/internal/weave"
 )
 
-func ip(s string) netip.Addr { return netip.MustParseAddr(s) }
+func ip(s string) netip.Addr    { return netip.MustParseAddr(s) }
+func pfx(s string) netip.Prefix { return netip.MustParsePrefix(s) }
 
 var (
 	plan = weave.Plan{Routes: map[netip.Addr]weave.Target{
 		ip("198.18.0.1"): {Tailnet: "b", IP: ip("100.64.0.1")},
 		ip("100.64.0.2"): {Tailnet: "b", IP: ip("100.64.0.2")},
 		ip("100.64.0.1"): {Tailnet: "a", IP: ip("100.64.0.1")},
+	}, Subnets: map[netip.Prefix]weave.SubnetTarget{
+		pfx("10.99.0.0/24"):                     {Tailnet: "a", Prefix: pfx("10.99.0.0/24")},
+		pfx("198.18.1.0/24"):                    {Tailnet: "b", Prefix: pfx("10.99.0.0/24")},
+		pfx("fd7a:115c:a1e0:b1a:0:8:a63:0/120"): {Tailnet: "b", Prefix: pfx("fd7a:115c:a1e0:b1a:0:8:a63:0/120")},
 	}, Local: map[string]weave.Local{
 		"a": {IP: ip("100.64.0.3")},
 		"b": {IP: ip("100.64.0.3"), PeerAPIPort: 4242},
@@ -36,6 +41,8 @@ route replace unreachable 198.18.0.0/15 table 5180
 route replace 100.64.0.1/32 via 10.200.1.2 table 5180
 route replace 100.64.0.2/32 via 10.200.2.2 table 5180
 route replace 198.18.0.1/32 via 10.200.2.2 table 5180
+route replace 10.99.0.0/24 via 10.200.1.2 table 5180
+route replace 198.18.1.0/24 via 10.200.2.2 table 5180
 `
 	if got != want {
 		t.Errorf("got:\n%s\nwant:\n%s", got, want)
@@ -52,6 +59,7 @@ table inet tailweave {
 	chain prerouting {
 		type nat hook prerouting priority dstnat; policy accept;
 		ip daddr 198.18.0.1 dnat ip to 100.64.0.1
+		ip daddr 198.18.1.0/24 dnat ip prefix to 10.99.0.0/24
 		iifname "ts-b" ip daddr 100.64.0.3 tcp dport 4242 accept
 		iifname "ts-b" ip daddr 100.64.0.3 meta l4proto { tcp, udp, icmp } dnat ip to 10.200.2.1
 	}

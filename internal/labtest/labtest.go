@@ -83,6 +83,15 @@ func Scenario() string {
 	return ""
 }
 
+// RequireScenario skips the test unless the lab runs the given scenario, alone or as
+// part of "all".
+func RequireScenario(t testing.TB, scenario string) {
+	t.Helper()
+	if s := Scenario(); s != scenario && s != "all" {
+		t.Skipf("needs the lab scenario %s (now %q), run `make lab-up SCENARIO=%s`", scenario, s, scenario)
+	}
+}
+
 // LoginServer returns the control URL of a lab tailnet.
 func LoginServer(tailnet string) string {
 	return map[string]string{TailnetA: "http://172.30.0.10:8080", TailnetB: "http://172.30.0.11:8080"}[tailnet]
