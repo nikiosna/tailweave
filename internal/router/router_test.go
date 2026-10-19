@@ -10,7 +10,7 @@ import (
 )
 
 const (
-	protoICMP = 1
+	protoICMP = 1 // ICMPv6 (58) for IPv6 packets
 	protoTCP  = 6
 	protoUDP  = 17
 )
@@ -22,10 +22,22 @@ var (
 	peer   = netip.MustParseAddr("100.64.0.1") // exists in both tailnets
 	mapped = netip.MustParseAddr("198.18.0.1") // B's 100.64.0.1 on this machine
 	onlyA  = netip.MustParseAddr("100.64.0.2")
+
+	hostIP6 = netip.MustParseAddr("fd74:7765:6176::1")
+	selfA6  = netip.MustParseAddr("fd7a:115c:a1e0::3")
+	selfB6  = netip.MustParseAddr("fd7a:115c:a1e0::3")
+
+	labNet  = netip.MustParsePrefix("10.99.0.0/24")                     // routed by both tailnets
+	block   = netip.MustParsePrefix("198.18.1.0/24")                    // b's 10.99.0.0/24 on this machine
+	via7    = netip.MustParsePrefix("fd7a:115c:a1e0:b1a:0:7:a63:0/120") // a's 4via6 route
+	inSub   = netip.MustParseAddr("10.99.0.7")
+	inBlock = netip.MustParseAddr("198.18.1.7")
+	inVia   = netip.MustParseAddr("fd7a:115c:a1e0:b1a:0:7:a63:1")
 )
 
 // lab is a router with tailnets a and b, where a's 100.64.0.1 keeps its IP and b's is
-// mapped to 198.18.0.1.
+// mapped to 198.18.0.1. Both route 10.99.0.0/24, b's at 198.18.1.0/24, and a has a
+// 4via6 route.
 type lab struct {
 	r      *Router
 	host   *device     // what the router reads from and writes to as the host TUN
@@ -38,15 +50,19 @@ func newLab(t *testing.T) *lab {
 	t.Helper()
 	l := &lab{toHost: make(chan []byte, 16)}
 	l.host = newDevice(func(pkt []byte) { l.toHost <- append([]byte(nil), pkt...) })
-	l.r = New(l.host, hostIP)
+	l.r = New(l.host, hostIP, hostIP6)
 	l.a = l.r.AddTailnet("a").(*device)
 	l.b = l.r.AddTailnet("b").(*device)
-	l.r.SetSelf("a", selfA)
-	l.r.SetSelf("b", selfB)
+	l.r.SetSelf("a", selfA, selfA6)
+	l.r.SetSelf("b", selfB, selfB6)
 	l.r.SetPlan(weave.Plan{Routes: map[netip.Addr]weave.Target{
 		peer:   {Tailnet: "a", IP: peer},
 		onlyA:  {Tailnet: "a", IP: onlyA},
 		mapped: {Tailnet: "b", IP: peer},
+	}, Subnets: map[netip.Prefix]weave.SubnetTarget{
+		labNet: {Tailnet: "a", Prefix: labNet},
+		block:  {Tailnet: "b", Prefix: labNet},
+		via7:   {Tailnet: "a", Prefix: via7},
 	}})
 	done := make(chan error, 1)
 	go func() { done <- l.r.Run() }()
@@ -214,9 +230,152 @@ func TestNoSelfIPYet(t *testing.T) {
 	none(t, a.in)
 }
 
-// build returns an IPv4 packet with valid checksums. For ICMP, ports are ignored and the
-// packet is an echo request (or reply if answer is set) with ID 0x1234.
+func TestSubnetRoutes(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		proto byte
+	}{{"tcp", protoTCP}, {"udp", protoUDP}, {"icmp", protoICMP}} {
+		t.Run(tc.name, func(t *testing.T) {
+			l := newLab(t)
+
+			// a's route keeps its prefix.
+			l.send(build(tc.proto, hostIP, inSub, 40000, 80, false))
+			check(t, recv(t, l.a), tc.proto, selfA, inSub)
+			none(t, l.b.in)
+			reply(l.a, build(tc.proto, inSub, selfA, 80, 40000, true))
+			check(t, recvHost(t, l), tc.proto, inSub, hostIP)
+
+			// b's is reachable in its block, with the same host part.
+			l.send(build(tc.proto, hostIP, inBlock, 40001, 80, false))
+			check(t, recv(t, l.b), tc.proto, selfB, inSub)
+			none(t, l.a.in)
+			reply(l.b, build(tc.proto, inSub, selfB, 80, 40001, true))
+			check(t, recvHost(t, l), tc.proto, inBlock, hostIP)
+		})
+	}
+}
+
+func TestViaRoutes(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		proto byte
+	}{{"tcp", protoTCP}, {"udp", protoUDP}, {"icmp", protoICMP}} {
+		t.Run(tc.name, func(t *testing.T) {
+			l := newLab(t)
+			l.send(build(tc.proto, hostIP6, inVia, 40000, 80, false))
+			check(t, recv(t, l.a), tc.proto, selfA6, inVia)
+			none(t, l.b.in)
+			reply(l.a, build(tc.proto, inVia, selfA6, 80, 40000, true))
+			check(t, recvHost(t, l), tc.proto, inVia, hostIP6)
+		})
+	}
+}
+
+func TestDropsIPv6(t *testing.T) {
+	l := newLab(t)
+	// Not from the host's IPv6 address, or not routed.
+	l.send(build(protoUDP, netip.MustParseAddr("fd00::5"), inVia, 1, 2, false))
+	l.send(build(protoUDP, hostIP6, netip.MustParseAddr("fd7a:115c:a1e0:b1a:0:8:a63:1"), 1, 2, false))
+	l.send(build(protoUDP, hostIP6, netip.MustParseAddr("fd7a:115c:a1e0::1"), 1, 2, false))
+	none(t, l.a.in)
+	none(t, l.b.in)
+	// From a tailnet: only to the engine's own IPv6, only from routed addresses.
+	reply(l.a, build(protoUDP, inVia, netip.MustParseAddr("fd7a:115c:a1e0::9"), 1, 2, false))
+	reply(l.a, build(protoUDP, netip.MustParseAddr("fd7a:115c:a1e0::1"), selfA6, 1, 2, false))
+	none(t, l.toHost)
+
+	// Without an IPv6 address on the host, nothing IPv6 gets through.
+	l.r.hostIP6 = netip.Addr{}
+	reply(l.a, build(protoUDP, inVia, selfA6, 1, 2, false))
+	none(t, l.toHost)
+}
+
+func TestNoSelfIPv6Yet(t *testing.T) {
+	l := newLab(t)
+	l.r.SetSelf("a", selfA, netip.Addr{})
+	l.send(build(protoUDP, hostIP6, inVia, 40000, 8, false))
+	none(t, l.a.in)
+	// IPv4 still works.
+	l.send(build(protoUDP, hostIP, inSub, 40000, 8, false))
+	check(t, recv(t, l.a), protoUDP, selfA, inSub)
+}
+
+func TestLongestPrefix(t *testing.T) {
+	l := newLab(t)
+	wide := netip.MustParsePrefix("10.0.0.0/8")
+	l.r.SetPlan(weave.Plan{Subnets: map[netip.Prefix]weave.SubnetTarget{
+		wide:   {Tailnet: "b", Prefix: wide},
+		labNet: {Tailnet: "a", Prefix: labNet},
+	}})
+	l.send(build(protoUDP, hostIP, inSub, 1, 2, false))
+	check(t, recv(t, l.a), protoUDP, selfA, inSub)
+	l.send(build(protoUDP, hostIP, netip.MustParseAddr("10.98.0.7"), 1, 2, false))
+	check(t, recv(t, l.b), protoUDP, selfB, netip.MustParseAddr("10.98.0.7"))
+}
+
+func TestTranslate(t *testing.T) {
+	for _, tc := range []struct{ a, to, want string }{
+		{"10.99.0.7", "198.18.1.0/24", "198.18.1.7"},
+		{"10.99.0.135", "198.18.2.128/25", "198.18.2.135"},
+		{"10.99.3.7", "198.18.4.0/22", "198.18.7.7"},
+		{"10.99.0.7", "198.18.1.9/32", "198.18.1.9"},
+		{"fd7a:115c:a1e0:b1a:0:7:a63:1", "fd7a:115c:a1e0:b1a:0:9:a63:0/120", "fd7a:115c:a1e0:b1a:0:9:a63:1"},
+	} {
+		if got := translate(netip.MustParseAddr(tc.a), netip.MustParsePrefix(tc.to)); got.String() != tc.want {
+			t.Errorf("translate(%s, %s) = %s, want %s", tc.a, tc.to, got, tc.want)
+		}
+	}
+	if got := translate(netip.MustParseAddr("10.99.0.7"), via7); got.IsValid() {
+		t.Errorf("translate across families = %s", got)
+	}
+}
+
+// build returns an IPv4 or IPv6 packet with valid checksums, depending on src. For ICMP,
+// ports are ignored and the packet is an echo request (or reply if answer is set) with
+// ID 0x1234.
 func build(proto byte, src, dst netip.Addr, sport, dport uint16, answer bool) []byte {
+	if src.Is6() {
+		return build6(proto, src, dst, sport, dport, answer)
+	}
+	l4 := buildL4(proto, sport, dport, answer, false)
+	p := make([]byte, 20+len(l4))
+	p[0] = 0x45
+	binary.BigEndian.PutUint16(p[2:], uint16(len(p)))
+	p[8] = 64
+	p[9] = proto
+	s, d := src.As4(), dst.As4()
+	copy(p[12:], s[:])
+	copy(p[16:], d[:])
+	copy(p[20:], l4)
+	fixChecksums(p)
+	return p
+}
+
+// build6 is build for IPv6; ICMP is ICMPv6.
+func build6(proto byte, src, dst netip.Addr, sport, dport uint16, answer bool) []byte {
+	l4 := buildL4(proto, sport, dport, answer, true)
+	p := make([]byte, 40+len(l4))
+	p[0] = 0x60
+	binary.BigEndian.PutUint16(p[4:], uint16(len(l4)))
+	p[6] = next(proto, true)
+	p[7] = 64
+	s, d := src.As16(), dst.As16()
+	copy(p[8:], s[:])
+	copy(p[24:], d[:])
+	copy(p[40:], l4)
+	fixChecksums(p)
+	return p
+}
+
+// next returns the IP protocol number of proto, which is ICMPv6 for ICMP over IPv6.
+func next(proto byte, v6 bool) byte {
+	if proto == protoICMP && v6 {
+		return 58
+	}
+	return proto
+}
+
+func buildL4(proto byte, sport, dport uint16, answer, v6 bool) []byte {
 	var l4 []byte
 	switch proto {
 	case protoTCP:
@@ -241,25 +400,28 @@ func build(proto byte, src, dst netip.Addr, sport, dport uint16, answer bool) []
 		if answer {
 			l4[0] = 0
 		}
+		if v6 {
+			l4[0] = 128
+			if answer {
+				l4[0] = 129
+			}
+		}
 		binary.BigEndian.PutUint16(l4[4:], 0x1234)
 		binary.BigEndian.PutUint16(l4[6:], 1)
 		copy(l4[8:], "ping")
 	}
-	p := make([]byte, 20+len(l4))
-	p[0] = 0x45
-	binary.BigEndian.PutUint16(p[2:], uint16(len(p)))
-	p[8] = 64
-	p[9] = proto
-	s, d := src.As4(), dst.As4()
-	copy(p[12:], s[:])
-	copy(p[16:], d[:])
-	copy(p[20:], l4)
-	fixChecksums(p)
-	return p
+	return l4
 }
 
-// fixChecksums computes all checksums of an IPv4 packet from scratch.
+// fixChecksums computes all checksums of an IPv4 or IPv6 packet from scratch.
 func fixChecksums(p []byte) {
+	if p[0]>>4 == 6 {
+		l4 := p[40:]
+		off := map[byte]int{58: 2, protoTCP: 16, protoUDP: 6}[p[6]]
+		binary.BigEndian.PutUint16(l4[off:], 0)
+		binary.BigEndian.PutUint16(l4[off:], ^sum(pseudo6(p), l4))
+		return
+	}
 	binary.BigEndian.PutUint16(p[10:], 0)
 	binary.BigEndian.PutUint16(p[10:], ^sum(0, p[:20]))
 	l4 := p[20:]
@@ -285,6 +447,14 @@ func pseudo(p []byte) uint32 {
 	return s + uint32(p[9]) + uint32(len(p)-20)
 }
 
+func pseudo6(p []byte) uint32 {
+	var s uint32
+	for i := 8; i < 40; i += 2 {
+		s += uint32(binary.BigEndian.Uint16(p[i:]))
+	}
+	return s + uint32(p[6]) + uint32(len(p)-40)
+}
+
 func sum(s uint32, b []byte) uint16 {
 	for len(b) >= 2 {
 		s += uint32(binary.BigEndian.Uint16(b))
@@ -302,6 +472,23 @@ func sum(s uint32, b []byte) uint16 {
 // check verifies addresses and that every checksum is still valid.
 func check(t *testing.T, p []byte, proto byte, src, dst netip.Addr) {
 	t.Helper()
+	if p[0]>>4 == 6 {
+		if p[6] != next(proto, true) {
+			t.Fatalf("next header %d, want %d", p[6], next(proto, true))
+		}
+		if got := netip.AddrFrom16([16]byte(p[8:24])); got != src {
+			t.Errorf("source %s, want %s", got, src)
+		}
+		if got := netip.AddrFrom16([16]byte(p[24:40])); got != dst {
+			t.Errorf("destination %s, want %s", got, dst)
+		}
+		want := append([]byte(nil), p...)
+		fixChecksums(want)
+		if string(want) != string(p) {
+			t.Errorf("checksums wrong after rewrite:\n got % x\nwant % x", p, want)
+		}
+		return
+	}
 	if p[9] != proto {
 		t.Fatalf("protocol %d, want %d", p[9], proto)
 	}

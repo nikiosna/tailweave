@@ -32,8 +32,12 @@ const (
 // VethPrefix starts the host side names of the namespaces' veth pairs ("twh0", ...).
 const VethPrefix = "twh"
 
-// CGNAT is the range Tailscale assigns node addresses from.
-var CGNAT = netip.MustParsePrefix("100.64.0.0/10")
+// CGNAT is the range Tailscale assigns node addresses from; TailscaleULA is its IPv6
+// counterpart.
+var (
+	CGNAT        = netip.MustParsePrefix("100.64.0.0/10")
+	TailscaleULA = netip.MustParsePrefix("fd7a:115c:a1e0::/48")
+)
 
 // Namespace is where a tailnet's tailscaled runs.
 type Namespace struct {
@@ -43,11 +47,13 @@ type Namespace struct {
 	HostIP  netip.Addr // the host's address on the veth pair
 	Veth    string     // the namespace's end of the veth pair
 	Tun     string     // tailscaled's TUN interface inside the namespace
+
+	Gateway6, HostIP6 netip.Addr // the same for IPv6, which carries 4via6 routes; may be zero
 }
 
-// HostRoutes renders `ip -batch` input that replaces the contents of Table. Prefixes in
-// blocked are unreachable unless a more specific route exists, so unrouted tailnet IPs do
-// not leak to the default route.
+// HostRoutes renders `ip -batch` input that replaces the IPv4 contents of Table. IPv4
+// prefixes in blocked are unreachable unless a more specific route exists, so unrouted
+// tailnet IPs do not leak to the default route.
 func HostRoutes(p weave.Plan, nss []Namespace, blocked []netip.Prefix) (string, error) {
 	gw := map[string]netip.Addr{}
 	for _, ns := range nss {
@@ -56,7 +62,9 @@ func HostRoutes(p weave.Plan, nss []Namespace, blocked []netip.Prefix) (string, 
 	var b strings.Builder
 	fmt.Fprintf(&b, "route flush table %d\n", Table)
 	for _, pfx := range blocked {
-		fmt.Fprintf(&b, "route replace unreachable %s table %d\n", pfx.Masked(), Table)
+		if pfx.Addr().Is4() {
+			fmt.Fprintf(&b, "route replace unreachable %s table %d\n", pfx.Masked(), Table)
+		}
 	}
 	for _, ip := range sortedIPs(p.Routes) {
 		t := p.Routes[ip]
@@ -78,6 +86,28 @@ func HostRoutes(p weave.Plan, nss []Namespace, blocked []netip.Prefix) (string, 
 		fmt.Fprintf(&b, "route replace %s via %s table %d\n", s, g, Table)
 	}
 	return b.String(), nil
+}
+
+// HostRoutes6 renders `ip -6 -batch` input that replaces the IPv6 contents of Table: the
+// 4via6 routes, into namespaces with an IPv6 gateway.
+func HostRoutes6(p weave.Plan, nss []Namespace, blocked []netip.Prefix) string {
+	gw := map[string]netip.Addr{}
+	for _, ns := range nss {
+		gw[ns.Tailnet] = ns.Gateway6
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "route flush table %d\n", Table)
+	for _, pfx := range blocked {
+		if pfx.Addr().Is6() {
+			fmt.Fprintf(&b, "route replace unreachable %s table %d\n", pfx.Masked(), Table)
+		}
+	}
+	for _, s := range sortedPrefixes(p.Subnets) {
+		if g := gw[p.Subnets[s].Tailnet]; s.Addr().Is6() && g.IsValid() {
+			fmt.Fprintf(&b, "route replace %s via %s table %d\n", s, g, Table)
+		}
+	}
+	return b.String()
 }
 
 // NamespaceRules renders an `nft -f` script that atomically replaces tailweave's table in
@@ -134,6 +164,9 @@ func NamespaceRules(p weave.Plan, ns Namespace) string {
 	// Traffic from the host leaves with the instance's own tailnet IP; tailscaled's own
 	// traffic already has one.
 	fmt.Fprintf(&b, "\t\toifname %q ip saddr != %s masquerade\n", ns.Tun, CGNAT)
+	if ns.HostIP6.IsValid() {
+		fmt.Fprintf(&b, "\t\toifname %q ip6 saddr != %s masquerade\n", ns.Tun, TailscaleULA)
+	}
 	// Peers reach the host from the IP they are routed at there.
 	if inbound {
 		var m []string

@@ -1,15 +1,21 @@
 // Package dns is tailweave's replacement for MagicDNS: an authoritative server for the
 // tailnet domains that answers with the IP each device is routed to on this machine.
+// Like MagicDNS, it also answers 4via6 names such as 10-1-2-3-via-7.<domain> with the
+// IPv6 address of 10.1.2.3 at site 7, as long as a 4via6 route of the domain's tailnet
+// that holds it is routed.
 package dns
 
 import (
 	"context"
+	"encoding/binary"
 	"net"
 	"net/netip"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"time"
 
+	"github.com/Nikiosna/tailweave/internal/weave"
 	"github.com/miekg/dns"
 )
 
@@ -17,8 +23,9 @@ import (
 const TTL = 10
 
 type records struct {
-	names   map[string]netip.Addr // lowercase FQDN with trailing dot
-	domains []string              // with trailing dot
+	names   map[string]netip.Addr     // lowercase FQDN with trailing dot
+	domains []string                  // with trailing dot
+	via     map[string][]netip.Prefix // zone with trailing dot -> routed 4via6 prefixes
 }
 
 // Server answers queries for the tailnet domains. The zero value answers nothing;
@@ -29,11 +36,15 @@ type Server struct {
 }
 
 // Update replaces all records atomically. names map lowercase FQDNs with trailing dot
-// to addresses; domains are the zones the server is authoritative for.
-func (s *Server) Update(names map[string]netip.Addr, domains []string) {
-	r := &records{names: names}
+// to addresses; domains are the zones the server is authoritative for; via are the
+// routed 4via6 prefixes per domain.
+func (s *Server) Update(names map[string]netip.Addr, domains []string, via map[string][]netip.Prefix) {
+	r := &records{names: names, via: map[string][]netip.Prefix{}}
 	for _, d := range domains {
 		r.domains = append(r.domains, dns.Fqdn(strings.ToLower(d)))
+	}
+	for d, ps := range via {
+		r.via[dns.Fqdn(strings.ToLower(d))] = ps
 	}
 	s.rec.Store(r)
 }
@@ -92,6 +103,16 @@ func (s *Server) ServeDNS(w dns.ResponseWriter, req *dns.Msg) {
 		_ = w.WriteMsg(m)
 		return
 	}
+	if ip, ok := r.lookupVia(name); ok {
+		if q.Qtype == dns.TypeAAAA || q.Qtype == dns.TypeANY {
+			m.Answer = append(m.Answer, &dns.AAAA{
+				Hdr:  dns.RR_Header{Name: q.Name, Rrtype: dns.TypeAAAA, Class: dns.ClassINET, Ttl: TTL},
+				AAAA: ip.AsSlice(),
+			})
+		}
+		_ = w.WriteMsg(m)
+		return
+	}
 	switch zone := r.zone(name); {
 	case zone == "":
 		m.Rcode = dns.RcodeRefused
@@ -99,6 +120,47 @@ func (s *Server) ServeDNS(w dns.ResponseWriter, req *dns.Msg) {
 		m.Rcode = dns.RcodeNameError
 	} // the zone apex itself exists without records
 	_ = w.WriteMsg(m)
+}
+
+// lookupVia resolves a 4via6 name, <IPv4 with dashes>-via-<site>.<zone>, to its address
+// if a routed 4via6 prefix of the zone holds it.
+func (r *records) lookupVia(name string) (netip.Addr, bool) {
+	label, zone, ok := strings.Cut(name, ".")
+	if !ok || len(r.via[zone]) == 0 {
+		return netip.Addr{}, false
+	}
+	ip, ok := viaAddr(label)
+	if !ok {
+		return netip.Addr{}, false
+	}
+	for _, p := range r.via[zone] {
+		if p.Contains(ip) {
+			return ip, true
+		}
+	}
+	return netip.Addr{}, false
+}
+
+// viaAddr parses a 4via6 label like Tailscale does: 10-1-2-3-via-7, the site ID also in
+// hex (0x7).
+func viaAddr(label string) (netip.Addr, bool) {
+	v4s, site, ok := strings.Cut(label, "-via-")
+	if !ok {
+		return netip.Addr{}, false
+	}
+	v4, err := netip.ParseAddr(strings.ReplaceAll(v4s, "-", "."))
+	if err != nil || !v4.Is4() {
+		return netip.Addr{}, false
+	}
+	id, err := strconv.ParseUint(site, 0, 32)
+	if err != nil {
+		return netip.Addr{}, false
+	}
+	b := weave.ViaRange.Addr().As16()
+	binary.BigEndian.PutUint32(b[8:], uint32(id))
+	a4 := v4.As4()
+	copy(b[12:], a4[:])
+	return netip.AddrFrom16(b), true
 }
 
 func (r *records) zone(name string) string {

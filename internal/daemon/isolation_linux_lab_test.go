@@ -35,7 +35,16 @@ func TestIsolation(t *testing.T) {
 
 	t.Run("lan", func(t *testing.T) {
 		lan := lanClient(t)
-		for _, ip := range []netip.Addr{a1, b1, b3} {
+		ips := []netip.Addr{a1, b1, b3}
+		if s := labtest.Scenario(); s == "subnets" || s == "all" {
+			// Subnet routes, as they are and remapped.
+			st := waitState(t, tw, func(s daemon.State) bool { return routeOf(s, "b", labSubnet).Routed.IsValid() })
+			ips = append(ips, netip.MustParseAddr("10.99.0.1"), hostIn(routeOf(st, "b", labSubnet).Routed, 1))
+			if got := waitCurl(t, "10.99.0.1", "router-a"); got != "router-a" {
+				t.Fatalf("host does not reach router-a's subnet: %q", got)
+			}
+		}
+		for _, ip := range ips {
 			if out, err := labtest.Output("sudo", "-n", "ip", "netns", "exec", lan, "curl", "-s", "-m3", "http://"+ip.String()+"/"); err == nil {
 				t.Errorf("LAN client reaches %s: %q", ip, out)
 			}

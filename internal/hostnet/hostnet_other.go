@@ -17,3 +17,5 @@ func Cleanup(dns netip.Addr)                      {}
 func (h *Host) Setup() error                      { return errUnsupported }
 func (h *Host) setDomains(domains []string) error { return errUnsupported }
 func (h *Host) Teardown()                         {}
+func (h *Host) addRoute(p netip.Prefix) error     { return errUnsupported }
+func (h *Host) delRoute(p netip.Prefix)           {}

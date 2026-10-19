@@ -459,7 +459,8 @@ func device(s daemon.State, tailnet, name string) *weave.Device {
 
 func curl(t *testing.T, host string) string {
 	t.Helper()
-	out, _ := labtest.Output("curl", "-s", "-m5", "http://"+host+"/")
+	// -g: no globbing, so IPv6 literals like [fd7a::1] work.
+	out, _ := labtest.Output("curl", "-s", "-g", "-m5", "http://"+host+"/")
 	return out
 }
 

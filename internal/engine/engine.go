@@ -14,6 +14,7 @@ import (
 	"net/netip"
 	"os"
 	"path/filepath"
+	"slices"
 	"sync"
 	"time"
 
@@ -32,8 +33,9 @@ import (
 type Backend struct {
 	StateDir string         // per tailnet state in <StateDir>/<name>
 	HostIP   netip.Addr     // address of the TUN on the host
+	HostIP6  netip.Addr     // its IPv6 address, for 4via6 routes; zero: no IPv6
 	DNS      netip.Addr     // address of the DNS service
-	Routes   []netip.Prefix // ranges routed into the TUN
+	Routes   []netip.Prefix // ranges always routed into the TUN; subnet routes are added
 
 	dev  tun.Device
 	net  *hostnet.Host
@@ -63,11 +65,11 @@ func (b *Backend) Setup() error {
 		return err
 	}
 	b.dev = dev
-	b.net = &hostnet.Host{Tun: name, HostIP: b.HostIP, DNS: b.DNS, Routes: b.Routes}
+	b.net = &hostnet.Host{Tun: name, HostIP: b.HostIP, HostIP6: b.HostIP6, DNS: b.DNS, Routes: b.Routes}
 	if err := b.net.Setup(); err != nil {
 		return err
 	}
-	b.r = router.New(dev, b.HostIP)
+	b.r = router.New(dev, b.HostIP, b.HostIP6)
 	b.done = make(chan error, 1)
 	go func() { b.done <- b.r.Run() }()
 	b.insts = map[string]*Instance{}
@@ -96,10 +98,22 @@ func (b *Backend) Teardown() {
 func (b *Backend) Apply(p weave.Plan) error {
 	b.mu.Lock()
 	for name, i := range b.insts {
-		b.r.SetSelf(name, i.selfIP())
+		v4, v6 := i.selfIPs()
+		b.r.SetSelf(name, v4, v6)
 	}
 	b.mu.Unlock()
 	b.r.SetPlan(p)
+	// Subnet routes outside the ranges routed anyway, which hold the pool and 4via6.
+	var extra []netip.Prefix
+	for s := range p.Subnets {
+		if !slices.ContainsFunc(b.Routes, func(r netip.Prefix) bool { return r.Contains(s.Addr()) && r.Bits() <= s.Bits() }) {
+			extra = append(extra, s)
+		}
+	}
+	slices.SortFunc(extra, func(a, b netip.Prefix) int { return a.Addr().Compare(b.Addr()) })
+	if err := b.net.SetRoutes(extra); err != nil {
+		return err
+	}
 	return b.net.SetDomains(p.Domains)
 }
 
@@ -173,10 +187,11 @@ func (i *Instance) Up(l tailnet.Login) error {
 	}
 	lc, err := srv.LocalClient()
 	if err == nil {
-		// The host reaches peers only; subnet routes and DNS are tailweave's business.
+		// Subnet routes reach the engine, so it sends to them; which of them the host
+		// reaches, and DNS, are tailweave's business.
 		_, err = lc.EditPrefs(context.Background(), &ipn.MaskedPrefs{
 			RouteAllSet: true, CorpDNSSet: true,
-			Prefs: ipn.Prefs{RouteAll: false, CorpDNS: false},
+			Prefs: ipn.Prefs{RouteAll: true, CorpDNS: false},
 		})
 	}
 	if err != nil {
@@ -280,13 +295,12 @@ func (i *Instance) stopLocked() {
 	}
 }
 
-// selfIP is the engine's own tailnet IPv4, or the zero Addr.
-func (i *Instance) selfIP() netip.Addr {
+// selfIPs are the engine's own tailnet IPv4 and IPv6, or zero Addrs.
+func (i *Instance) selfIPs() (v4, v6 netip.Addr) {
 	i.mu.Lock()
 	defer i.mu.Unlock()
 	if i.srv == nil {
-		return netip.Addr{}
+		return v4, v6
 	}
-	v4, _ := i.srv.TailscaleIPs()
-	return v4
+	return i.srv.TailscaleIPs()
 }

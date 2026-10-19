@@ -41,3 +41,26 @@ func TestAddrs(t *testing.T) {
 		t.Error("range smaller than /30 accepted")
 	}
 }
+
+func TestAddrs6(t *testing.T) {
+	transit := netip.MustParsePrefix("fd74:7765:6176::/64")
+	for _, tc := range []struct {
+		index    int
+		host, ns string
+	}{
+		{0, "fd74:7765:6176::1", "fd74:7765:6176::2"},
+		{1, "fd74:7765:6176::5", "fd74:7765:6176::6"},
+		{64, "fd74:7765:6176::101", "fd74:7765:6176::102"},
+	} {
+		host, ns, err := Addrs6(transit, tc.index)
+		if err != nil || host.String() != tc.host || ns.String() != tc.ns {
+			t.Errorf("Addrs6(%d) = %s, %s, %v; want %s, %s", tc.index, host, ns, err, tc.host, tc.ns)
+		}
+	}
+	if _, _, err := Addrs6(netip.MustParsePrefix("fd00::/124"), 4); err == nil {
+		t.Error("index beyond the range accepted")
+	}
+	if _, _, err := Addrs6(netip.MustParsePrefix("10.0.0.0/8"), 0); err == nil {
+		t.Error("IPv4 range accepted")
+	}
+}

@@ -18,13 +18,56 @@ import (
 
 // Host is the host side of the router's TUN device.
 type Host struct {
-	Tun    string         // name of the TUN device, as the OS reports it
-	HostIP netip.Addr     // the TUN's address; the source of all host traffic into it
-	DNS    netip.Addr     // address of the DNS service on this machine
-	Routes []netip.Prefix // ranges routed into the TUN
+	Tun     string         // name of the TUN device, as the OS reports it
+	HostIP  netip.Addr     // the TUN's address; the source of all host traffic into it
+	HostIP6 netip.Addr     // the same for IPv6; zero: no IPv6
+	DNS     netip.Addr     // address of the DNS service on this machine
+	Routes  []netip.Prefix // ranges always routed into the TUN
 
+	extra   []netip.Prefix // routes added by SetRoutes
 	domains []string
 	set     bool // domains were registered at least once
+}
+
+// SetRoutes routes ps into the TUN in addition to Routes, and no longer what an earlier
+// call routed that is not in ps.
+func (h *Host) SetRoutes(ps []netip.Prefix) error {
+	add, del := diffRoutes(h.extra, ps)
+	for _, p := range del {
+		h.delRoute(p)
+		h.extra = slices.DeleteFunc(h.extra, func(x netip.Prefix) bool { return x == p })
+	}
+	for _, p := range add {
+		if err := h.addRoute(p); err != nil {
+			return err
+		}
+		h.extra = append(h.extra, p)
+	}
+	return nil
+}
+
+// diffRoutes returns the prefixes in want but not in have, and those in have but not in
+// want.
+func diffRoutes(have, want []netip.Prefix) (add, del []netip.Prefix) {
+	for _, p := range want {
+		if !slices.Contains(have, p) && !slices.Contains(add, p) {
+			add = append(add, p)
+		}
+	}
+	for _, p := range have {
+		if !slices.Contains(want, p) {
+			del = append(del, p)
+		}
+	}
+	return add, del
+}
+
+// srcFor returns the TUN's address in the family of p.
+func (h *Host) srcFor(p netip.Prefix) netip.Addr {
+	if p.Addr().Is4() {
+		return h.HostIP
+	}
+	return h.HostIP6
 }
 
 // SetDomains makes the system resolver ask the DNS service for names in domains. It only

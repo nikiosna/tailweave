@@ -33,6 +33,7 @@ x-peer: &peer
   sysctls:
     net.ipv4.ip_forward: "1"
     net.ipv6.conf.all.forwarding: "1"
+    net.ipv6.conf.all.disable_ipv6: "0"
 
 x-peer-a-env: &peer-a-env
   TS_AUTHKEY: ${KEY_A:-}
@@ -106,7 +107,8 @@ services:
     environment:
       <<: *peer-a-env
       TS_HOSTNAME: router-a
-      TS_ROUTES: 10.99.0.0/24
+      # 4via6 (site 7) for the same /24: tailscale debug via 7 10.99.0.0/24
+      TS_ROUTES: 10.99.0.0/24,fd7a:115c:a1e0:b1a:0:7:a63:0/120
       LAB_EXTRA_ADDRS: 10.99.0.1/32
     volumes: [router-a:/var/lib/tailscale]
     networks: [lab]
@@ -153,7 +155,8 @@ services:
     environment:
       <<: *peer-b-env
       TS_HOSTNAME: router-b
-      TS_ROUTES: 10.99.0.0/24,192.168.104.0/24
+      # 4via6 (site 8): tailscale debug via 8 10.99.0.0/24
+      TS_ROUTES: 10.99.0.0/24,192.168.104.0/24,fd7a:115c:a1e0:b1a:0:8:a63:0/120
       LAB_EXTRA_ADDRS: 10.99.0.1/32
     volumes: [router-b:/var/lib/tailscale]
     networks: [lab]

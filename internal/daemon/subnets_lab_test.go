@@ -102,6 +102,37 @@ func TestSubnets(t *testing.T) {
 	})
 }
 
+// TestVia checks 4via6 in the subnets scenario: router-a routes 10.99.0.0/24 as site 7,
+// router-b the same /24 as site 8, so both are reachable at once, by IPv6 address and by
+// MagicDNS name.
+func TestVia(t *testing.T) {
+	labtest.RequireLab(t)
+	labtest.RequireScenario(t, "subnets")
+	tw := startTailweave(t, t.TempDir())
+	tw.login(t, labtest.TailnetA)
+	tw.login(t, labtest.TailnetB)
+	via7 := netip.MustParsePrefix("fd7a:115c:a1e0:b1a:0:7:a63:0/120")
+	via8 := netip.MustParsePrefix("fd7a:115c:a1e0:b1a:0:8:a63:0/120")
+	waitState(t, tw, func(s daemon.State) bool {
+		return routeOf(s, "a", via7).Routed == via7 && routeOf(s, "b", via8).Routed == via8
+	})
+
+	for _, tc := range []struct{ host, want string }{
+		{"[fd7a:115c:a1e0:b1a:0:7:a63:1]", "router-a"},
+		{"[fd7a:115c:a1e0:b1a:0:8:a63:1]", "router-b"},
+		{"10-99-0-1-via-7.a.lab", "router-a"},
+		{"10-99-0-1-via-8.b.lab", "router-b"},
+	} {
+		if got := waitCurl(t, tc.host, tc.want); got != tc.want {
+			t.Errorf("curl %s = %q, want %q", tc.host, got, tc.want)
+		}
+	}
+	// Site 8 belongs to tailnet b; a's domain does not know it.
+	if out, ok := resolve(t, "10-99-0-1-via-8.a.lab"); ok {
+		t.Errorf("10-99-0-1-via-8.a.lab resolves: %s", out)
+	}
+}
+
 // routeOf returns a tailnet's subnet route as the state shows it, or the zero Route.
 func routeOf(s daemon.State, tailnet string, p netip.Prefix) weave.Route {
 	for _, d := range s.Devices {

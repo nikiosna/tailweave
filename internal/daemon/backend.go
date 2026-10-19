@@ -3,6 +3,7 @@ package daemon
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"net/netip"
 	"path/filepath"
 	"runtime"
@@ -56,24 +57,43 @@ func newBackend(cfg Config) (backend, error) {
 	stateDir := filepath.Join(cfg.StateDir, "tailnets")
 	switch cfg.Backend {
 	case BackendNetns:
+		transit6 := cfg.Transit6
+		if !netcfg.IPv6() {
+			slog.Warn("IPv6 is off on this host; 4via6 routes will not be reachable")
+			transit6 = netip.Prefix{}
+		}
 		return &netnsBackend{
 			mgr: &instance.Manager{
 				Transit:  cfg.Transit,
+				Transit6: transit6,
 				StateDir: stateDir,
 				RunDir:   filepath.Join(filepath.Dir(cfg.Socket), "tailnets"),
 			},
 			host: &netcfg.Host{
 				DNSAddr: cfg.DNS,
-				Blocked: []netip.Prefix{netcfg.CGNAT, cfg.Pool},
+				Blocked: []netip.Prefix{netcfg.CGNAT, cfg.Pool, weave.ViaRange},
 				Transit: cfg.Transit,
+				IPv6:    transit6.IsValid(),
 			},
 		}, nil
 	case BackendTsnet:
+		routes := []netip.Prefix{netcfg.CGNAT, cfg.Pool}
+		host6, _, err := instance.Addrs6(cfg.Transit6, 0)
+		if err != nil {
+			return nil, err
+		}
+		if runtime.GOOS == "linux" && !netcfg.IPv6() {
+			slog.Warn("IPv6 is off on this host; 4via6 routes will not be reachable")
+			host6 = netip.Addr{}
+		} else {
+			routes = append(routes, weave.ViaRange)
+		}
 		return &tsnetBackend{&engine.Backend{
 			StateDir: stateDir,
 			HostIP:   host,
+			HostIP6:  host6,
 			DNS:      cfg.DNS,
-			Routes:   []netip.Prefix{netcfg.CGNAT, cfg.Pool},
+			Routes:   routes,
 		}}, nil
 	}
 	return nil, fmt.Errorf("unknown backend %q", cfg.Backend)

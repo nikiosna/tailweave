@@ -55,11 +55,33 @@ func Addrs(transit netip.Prefix, index int) (host, ns netip.Addr, err error) {
 	return at(1), at(2), nil
 }
 
+// Addrs6 returns the host and namespace addresses of the index-th /126 in transit6.
+func Addrs6(transit6 netip.Prefix, index int) (host, ns netip.Addr, err error) {
+	if !transit6.Addr().Is6() || transit6.Bits() > 126 {
+		return host, ns, fmt.Errorf("transit6 range %s must be IPv6 and hold at least one /126", transit6)
+	}
+	if bits := 126 - transit6.Bits(); bits < 62 && index >= 1<<bits {
+		return host, ns, fmt.Errorf("transit6 range %s has no room for instance %d", transit6, index)
+	}
+	b := transit6.Masked().Addr().As16()
+	lo := uint64(b[8])<<56 | uint64(b[9])<<48 | uint64(b[10])<<40 | uint64(b[11])<<32 |
+		uint64(b[12])<<24 | uint64(b[13])<<16 | uint64(b[14])<<8 | uint64(b[15])
+	at := func(off uint64) netip.Addr {
+		x := lo + uint64(index)*4 + off
+		for i := range 8 {
+			b[15-i] = byte(x >> (8 * i))
+		}
+		return netip.AddrFrom16(b)
+	}
+	return at(1), at(2), nil
+}
+
 // Manager knows where instances live.
 type Manager struct {
 	Transit  netip.Prefix
-	StateDir string // tailscaled state per tailnet in <StateDir>/<name>
-	RunDir   string // LocalAPI sockets and short-lived files
+	Transit6 netip.Prefix // optional: IPv6 on the veth pairs, for 4via6 routes
+	StateDir string       // tailscaled state per tailnet in <StateDir>/<name>
+	RunDir   string       // LocalAPI sockets and short-lived files
 }
 
 // Instance is a running tailscaled in its namespace.
@@ -69,6 +91,8 @@ type Instance struct {
 	Socket  string     // tailscaled's LocalAPI socket
 	HostIP  netip.Addr // host side of the veth pair
 	Gateway netip.Addr // namespace side, where the host routes the tailnet's IPs to
+
+	HostIP6, Gateway6 netip.Addr // the same for IPv6; zero without Manager.Transit6
 
 	m      *Manager
 	hostIf string
@@ -84,7 +108,7 @@ type Instance struct {
 // Namespace describes the instance for netcfg.
 func (i *Instance) Namespace() netcfg.Namespace {
 	return netcfg.Namespace{Tailnet: i.Name, Netns: i.Netns, Gateway: i.Gateway,
-		HostIP: i.HostIP, Veth: i.nsIf, Tun: Tun}
+		HostIP: i.HostIP, Gateway6: i.Gateway6, HostIP6: i.HostIP6, Veth: i.nsIf, Tun: Tun}
 }
 
 // Start creates the namespace, starts tailscaled in it and waits for its socket. Leftovers
@@ -107,6 +131,11 @@ func (m *Manager) Start(name string, index int) (*Instance, error) {
 		hostIf:  fmt.Sprintf("%s%d", netcfg.VethPrefix, index),
 		nsIf:    fmt.Sprintf("twn%d", index),
 		done:    make(chan struct{}),
+	}
+	if m.Transit6.IsValid() {
+		if i.HostIP6, i.Gateway6, err = Addrs6(m.Transit6, index); err != nil {
+			return nil, err
+		}
 	}
 	i.cleanup()
 	if err := i.setupNetns(); err != nil {
@@ -161,6 +190,22 @@ func (i *Instance) setupNetns() error {
 	}
 	if err := run("ip", "netns", "exec", i.Netns, "sysctl", "-qw", "net.ipv4.ip_forward=1"); err != nil {
 		return err
+	}
+	// IPv6 only carries the host's traffic to 4via6 routes. The namespace gets no default
+	// route for it, so tailscaled talks to its control server and DERP over IPv4 only.
+	if i.HostIP6.IsValid() {
+		for _, args := range [][]string{
+			{"-6", "addr", "add", netip.PrefixFrom(i.HostIP6, 126).String(), "dev", i.hostIf, "nodad"},
+			{"-n", i.Netns, "-6", "addr", "add", netip.PrefixFrom(i.Gateway6, 126).String(), "dev", nsIf, "nodad"},
+			{"-n", i.Netns, "-6", "rule", "add", "pref", "5200", "lookup", "main", "suppress_prefixlength", "0"},
+		} {
+			if err := run("ip", args...); err != nil {
+				return err
+			}
+		}
+		if err := run("ip", "netns", "exec", i.Netns, "sysctl", "-qw", "net.ipv6.conf.all.forwarding=1"); err != nil {
+			return err
+		}
 	}
 	// `ip netns exec` bind-mounts this over /etc/resolv.conf, so tailscaled can resolve
 	// its control server without the host's stub resolver on 127.0.0.53.

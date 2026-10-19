@@ -18,25 +18,40 @@ func Cleanup(dns netip.Addr) {
 // Setup gives the TUN its addresses and routes the tailnet ranges into it through
 // netcfg.Table, which only locally generated traffic consults.
 func (h *Host) Setup() error {
-	for _, args := range [][]string{
+	cmds := [][]string{
 		{"addr", "add", netip.PrefixFrom(h.HostIP, 32).String(), "dev", h.Tun},
 		{"addr", "add", netip.PrefixFrom(h.DNS, 32).String(), "dev", h.Tun},
-		{"link", "set", h.Tun, "up"},
-	} {
+	}
+	if h.HostIP6.IsValid() {
+		cmds = append(cmds, []string{"-6", "addr", "add", netip.PrefixFrom(h.HostIP6, 128).String(), "dev", h.Tun, "nodad"})
+	}
+	for _, args := range append(cmds, []string{"link", "set", h.Tun, "up"}) {
 		if err := run("", "ip", args...); err != nil {
 			return err
 		}
 	}
-	if err := netcfg.AddRule(); err != nil {
+	if err := netcfg.AddRule(h.HostIP6.IsValid()); err != nil {
 		return err
 	}
 	for _, p := range h.Routes {
-		if err := run("", "ip", "route", "replace", p.Masked().String(), "dev", h.Tun,
-			"src", h.HostIP.String(), "table", fmt.Sprint(netcfg.Table)); err != nil {
+		if err := h.addRoute(p); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+func (h *Host) addRoute(p netip.Prefix) error {
+	src := h.srcFor(p)
+	if !src.IsValid() {
+		return nil // no IPv6 on this host
+	}
+	return run("", "ip", "route", "replace", p.Masked().String(), "dev", h.Tun,
+		"src", src.String(), "table", fmt.Sprint(netcfg.Table))
+}
+
+func (h *Host) delRoute(p netip.Prefix) {
+	_ = run("", "ip", "route", "del", p.Masked().String(), "table", fmt.Sprint(netcfg.Table))
 }
 
 func (h *Host) setDomains(domains []string) error {
@@ -48,6 +63,8 @@ func (h *Host) setDomains(domains []string) error {
 func (h *Host) Teardown() {
 	netcfg.DeleteRule()
 	_ = run("", "ip", "route", "flush", "table", fmt.Sprint(netcfg.Table))
+	_ = run("", "ip", "-6", "route", "flush", "table", fmt.Sprint(netcfg.Table))
+	h.extra = nil
 	if h.set {
 		_ = run("", "resolvectl", "revert", h.Tun)
 	}

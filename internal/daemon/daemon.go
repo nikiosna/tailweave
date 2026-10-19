@@ -279,7 +279,7 @@ func (d *Daemon) reconcile(ctx context.Context) error {
 	plan := d.plan
 	d.mu.Unlock()
 
-	d.dns.Update(plan.Names, plan.Domains)
+	d.dns.Update(plan.Names, plan.Domains, plan.Via)
 	return d.be.Apply(plan)
 }
 

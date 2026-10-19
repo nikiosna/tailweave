@@ -37,6 +37,9 @@ func assertHostClean(t *testing.T) {
 	if out := labtest.Run(t, "netstat", "-rn", "-f", "inet"); strings.Contains(out, "100.64/10") || strings.Contains(out, "198.18/15") {
 		t.Errorf("routes left:\n%s", out)
 	}
+	if out := labtest.Run(t, "netstat", "-rn", "-f", "inet6"); strings.Contains(out, "fd7a:115c:a1e0:b1a::/64") {
+		t.Errorf("IPv6 routes left:\n%s", out)
+	}
 }
 
 // tailscaleRules has nothing to return: macOS has no policy routing rules.

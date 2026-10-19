@@ -41,8 +41,13 @@ func assertHostClean(t *testing.T) {
 	if out, _ := labtest.Output("sudo", "-n", "iptables", "-S", "DOCKER-USER"); strings.Contains(out, "twh") {
 		t.Errorf("DOCKER-USER rules left:\n%s", out)
 	}
-	if out := labtest.Run(t, "ip", "rule"); strings.Contains(out, "5180") {
-		t.Errorf("ip rule left:\n%s", out)
+	for _, family := range []string{"-4", "-6"} {
+		if out := labtest.Run(t, "ip", family, "rule"); strings.Contains(out, "5180") {
+			t.Errorf("ip %s rule left:\n%s", family, out)
+		}
+		if out := labtest.Run(t, "ip", family, "route", "show", "table", "5180"); out != "" {
+			t.Errorf("ip %s routes left in table 5180:\n%s", family, out)
+		}
 	}
 }
 

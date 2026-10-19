@@ -30,12 +30,38 @@ func (h *Host) Setup() error {
 	if err := run("", "ifconfig", h.Tun, "inet", ip, ip, "netmask", "255.255.255.255", "up"); err != nil {
 		return err
 	}
+	if h.HostIP6.IsValid() {
+		if err := run("", "ifconfig", h.Tun, "inet6", h.HostIP6.String(), "prefixlen", "128"); err != nil {
+			return err
+		}
+	}
 	for _, p := range h.Routes {
-		if err := run("", "route", "-q", "-n", "add", "-inet", "-net", p.Masked().String(), "-interface", h.Tun); err != nil {
+		if err := h.addRoute(p); err != nil {
 			return err
 		}
 	}
 	return run("", "ifconfig", "lo0", "alias", h.DNS.String(), "netmask", "255.255.255.255")
+}
+
+func (h *Host) addRoute(p netip.Prefix) error {
+	if !h.srcFor(p).IsValid() {
+		return nil // no IPv6 on the utun
+	}
+	return run("", "route", "-q", "-n", "add", family(p), "-net", p.Masked().String(), "-interface", h.Tun)
+}
+
+// delRoute deletes the route for p if it leads into the utun.
+func (h *Host) delRoute(p netip.Prefix) {
+	if h.routedHere(p) {
+		_ = run("", "route", "-q", "-n", "delete", family(p), "-net", p.Masked().String())
+	}
+}
+
+func family(p netip.Prefix) string {
+	if p.Addr().Is4() {
+		return "-inet"
+	}
+	return "-inet6"
 }
 
 // setDomains registers the DNS service for domains: as resolver for names below them and
@@ -58,17 +84,15 @@ func (h *Host) setDomains(domains []string) error {
 // ignored: parts may not exist.
 func (h *Host) Teardown() {
 	Cleanup(h.DNS)
-	for _, p := range h.Routes {
-		if h.routedHere(p) {
-			_ = run("", "route", "-q", "-n", "delete", "-inet", "-net", p.Masked().String())
-		}
+	for _, p := range append(h.Routes, h.extra...) {
+		h.delRoute(p)
 	}
-	h.domains, h.set = nil, false
+	h.extra, h.domains, h.set = nil, nil, false
 }
 
 // routedHere reports whether the route the kernel picks for p leads into the utun.
 func (h *Host) routedHere(p netip.Prefix) bool {
-	out, err := exec.Command("route", "-n", "get", "-inet", "-net", p.Masked().String()).Output()
+	out, err := exec.Command("route", "-n", "get", family(p), "-net", p.Masked().String()).Output()
 	if err != nil {
 		return false
 	}

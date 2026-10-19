@@ -24,6 +24,7 @@ type Config struct {
 	Socket   string       `json:"socket"`   // Unix socket of the API (default DefaultSocket)
 	StateDir string       `json:"stateDir"` // state file and tailscaled state (default /var/lib/tailweave)
 	Transit  netip.Prefix `json:"transit"`  // netns: veth addresses, a /30 each; tsnet: the TUN's address is the first host (default 10.201.0.0/16)
+	Transit6 netip.Prefix `json:"transit6"` // the same for IPv6, which carries 4via6 routes: a /126 each (default fd74:7765:6176::/64)
 	Backend  string       `json:"backend"`  // "netns" or "tsnet" (default: netns on Linux, tsnet elsewhere)
 
 	// Tailnets is no longer supported; it only exists to reject old config files clearly.
@@ -75,11 +76,17 @@ func LoadConfig(path string) (Config, error) {
 	if !c.Transit.IsValid() {
 		c.Transit = netip.MustParsePrefix("10.201.0.0/16")
 	}
+	if !c.Transit6.IsValid() {
+		c.Transit6 = netip.MustParsePrefix("fd74:7765:6176::/64")
+	}
 	if !c.Pool.Addr().Is4() {
 		return c, fmt.Errorf("pool %s is not IPv4", c.Pool)
 	}
 	if !c.Transit.Addr().Is4() || c.Transit.Bits() > 30 {
 		return c, fmt.Errorf("transit %s must be IPv4 and hold at least one /30", c.Transit)
+	}
+	if !c.Transit6.Addr().Is6() || c.Transit6.Addr().Is4In6() || c.Transit6.Bits() > 126 {
+		return c, fmt.Errorf("transit6 %s must be IPv6 and hold at least one /126", c.Transit6)
 	}
 	return c, nil
 }

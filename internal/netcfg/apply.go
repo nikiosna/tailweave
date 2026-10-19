@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"net/netip"
+	"os"
 	"os/exec"
 	"slices"
 	"strings"
@@ -23,8 +24,9 @@ type Host struct {
 	Blocked    []netip.Prefix // see HostRoutes
 	DNSAddr    netip.Addr     // address of the DNS service, put on DNSLink
 	Transit    netip.Prefix   // addresses of the namespaces' veth pairs, see HostRules
+	IPv6       bool           // route 4via6 routes; the namespaces have IPv6 addresses
 
-	routes  string
+	routes  string // IPv4 and IPv6 scripts, as applied
 	rules   map[string]string
 	domains []string
 }
@@ -38,7 +40,7 @@ var dockerRules = [][]string{
 // Setup creates the static parts: the ip rule, IP forwarding and NAT for the namespaces,
 // and the DNS link. Leftovers of an earlier run must have been removed with Teardown.
 func (h *Host) Setup() error {
-	if err := AddRule(); err != nil {
+	if err := AddRule(h.IPv6); err != nil {
 		return err
 	}
 	if h.Transit.IsValid() {
@@ -93,10 +95,12 @@ func (h *Host) RemoveNamespace(tailnet string) {
 
 // Apply brings routes, namespace rules and DNS registration in line with the plan.
 func (h *Host) Apply(p weave.Plan) error {
-	routes, err := HostRoutes(p, h.Namespaces, h.Blocked)
+	routes4, err := HostRoutes(p, h.Namespaces, h.Blocked)
 	if err != nil {
 		return err
 	}
+	routes6 := HostRoutes6(p, h.Namespaces, h.Blocked)
+	routes := routes4 + routes6
 	// Rules first, so a newly mapped IP is translated as soon as it is routed.
 	if h.rules == nil {
 		h.rules = map[string]string{}
@@ -112,8 +116,13 @@ func (h *Host) Apply(p weave.Plan) error {
 		h.rules[ns.Netns] = r
 	}
 	if routes != h.routes {
-		if err := run(routes, "ip", "-batch", "-"); err != nil {
+		if err := run(routes4, "ip", "-batch", "-"); err != nil {
 			return err
+		}
+		if h.IPv6 {
+			if err := run(routes6, "ip", "-6", "-batch", "-"); err != nil {
+				return err
+			}
 		}
 		h.routes = routes
 	}
@@ -152,6 +161,7 @@ func RegisterDNS(link string, addr netip.Addr, domains []string) error {
 func (h *Host) Teardown() {
 	DeleteRule()
 	_ = run("", "ip", "route", "flush", "table", fmt.Sprint(Table))
+	_ = run("", "ip", "-6", "route", "flush", "table", fmt.Sprint(Table))
 	for _, ns := range h.Namespaces {
 		_ = run("", "ip", "netns", "exec", ns.Netns, "nft", "delete", "table", "inet", nftTable)
 	}
@@ -170,15 +180,30 @@ func ruleArgs() []string {
 	return []string{"pref", fmt.Sprint(RulePref), "iif", "lo", "lookup", fmt.Sprint(Table)}
 }
 
-// AddRule adds the ip rule that sends locally generated traffic to Table.
-func AddRule() error {
-	return run("", "ip", append([]string{"rule", "add"}, ruleArgs()...)...)
+// AddRule adds the ip rule that sends locally generated traffic to Table, and the same
+// for IPv6 if ipv6 is set.
+func AddRule(ipv6 bool) error {
+	if err := run("", "ip", append([]string{"rule", "add"}, ruleArgs()...)...); err != nil {
+		return err
+	}
+	if !ipv6 {
+		return nil
+	}
+	return run("", "ip", append([]string{"-6", "rule", "add"}, ruleArgs()...)...)
 }
 
-// DeleteRule deletes tailweave's ip rule, also when it exists more than once. The exact
+// IPv6 reports whether this host has IPv6 turned on.
+func IPv6() bool {
+	b, err := os.ReadFile("/proc/sys/net/ipv6/conf/all/disable_ipv6")
+	return err == nil && strings.TrimSpace(string(b)) == "0"
+}
+
+// DeleteRule deletes tailweave's ip rules, also when they exist more than once. The exact
 // match leaves rules of other programs at the same priority alone.
 func DeleteRule() {
 	for run("", "ip", append([]string{"rule", "del"}, ruleArgs()...)...) == nil {
+	}
+	for run("", "ip", append([]string{"-6", "rule", "del"}, ruleArgs()...)...) == nil {
 	}
 }
 
