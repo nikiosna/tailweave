@@ -83,10 +83,11 @@ tailweave runs without a config file. To change a default, create
 | Field | Default | Meaning |
 | --- | --- | --- |
 | `backend` | `netns` on Linux, `tsnet` elsewhere | `netns` or `tsnet` |
-| `autoMap` | `true` | Remap colliding devices automatically (initial value; `tailweave set` changes it later) |
-| `pool` | `198.18.0.0/15` | Addresses for remapped devices |
+| `autoMap` | `true` | Remap colliding devices and subnet routes automatically (initial value; `tailweave set` changes it later) |
+| `pool` | `198.18.0.0/15` | Addresses for remapped devices and subnet routes |
 | `dns` | `100.100.100.100` | Address of tailweave's DNS service |
 | `transit` | `10.201.0.0/16` | Internal addresses between the host and the tailnet instances |
+| `transit6` | `fd74:7765:6176::/64` | The same for IPv6, which only carries 4via6 routes |
 | `socket` | `/run/tailweave/tailweave.sock` (Linux), `/var/run/tailweave/tailweave.sock` (macOS) | Unix socket of the API |
 | `stateDir` | `/var/lib/tailweave` (Linux), `/Library/Application Support/tailweave` (macOS) | State file and the Tailscale state of every tailnet |
 
@@ -122,12 +123,21 @@ tailweave status                    # tailnets, devices, conflicts (no sudo need
 tailweave status home -a            # one tailnet, offline devices included
 sudo tailweave map home nas         # give a device a pool address by hand
 sudo tailweave unmap home nas
+sudo tailweave map home 10.0.0.0/24 # the same for a subnet route: a pool block of its size
+sudo tailweave unmap home 10.0.0.0/24
 sudo tailweave ui                   # optional web UI on http://127.0.0.1:5250
 ```
 
 Devices are reachable by name (via tailweave's DNS service) and by IP. When a device's
 IP also exists in a tailnet listed earlier, it gets an address from `198.18.0.0/15`;
 `tailweave status` shows which one.
+
+Subnet routes work the same way: a route is reachable as it is unless it overlaps a
+route of a tailnet listed earlier or a network of this machine (your LAN, Docker's
+networks, ...). Then it gets a block of the same size from the pool, e.g.
+`10.0.0.0/24` becomes `198.18.1.0/24` and `10.0.0.7` is reachable at `198.18.1.7`.
+4via6 routes (`fd7a:115c:a1e0:b1a:0:<site>:<IPv4>`) are unique by design and are
+routed as they are, including their names like `10-0-0-7-via-7.<tailnet domain>`.
 
 Peers can reach services on this machine like with Tailscale (TCP, UDP and ping): each
 tailnet's ACLs decide who gets in, and the host's firewall applies as usual. A remapped
@@ -142,8 +152,12 @@ tailweave.
 
 - **Quit other VPNs first.** Tailscale and other VPN clients that use the same ranges
   cannot run next to tailweave; it refuses to start until they are gone.
-- **No subnet routes and no exit nodes** yet. Only the peers themselves are reachable.
-- **IPv4 only.** Peers' IPv6 addresses are not routed.
+- **No exit nodes** yet.
+- **IPv6 only for 4via6 routes.** Peers' own IPv6 addresses are not routed, and 4via6
+  routes that two tailnets both use stay with the tailnet listed first.
+- **Hosts behind subnet routes cannot connect to this machine** with the Linux default
+  backend (`netns`); only peers can. With `tsnet` they can, if their subnet router
+  does not masquerade them.
 - **DNS settings from the admin console are ignored.** tailweave's DNS service answers
   for the peers' names; nameservers, search domains and split DNS configured in the
   tailnet are not applied.

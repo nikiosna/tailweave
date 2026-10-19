@@ -74,6 +74,19 @@ with sync_playwright() as p:
     page.check("#automap")
     expect(page.locator("#devices tr", has_text=name)).to_contain_text("auto-mapped")
 
+    # Subnet routes (scenario subnets): map router-b's 10.99.0.0/24 by hand, then unmap.
+    if any(r["prefix"] == "10.99.0.0/24" for r in device("router-b").get("routes", [])):
+        row = page.locator('#devices tr.route:has(> td:nth-child(2):text-is("b"))', has_text="10.99.0.0/24")
+        row.get_by_role("button", name="Map prefix").click()
+        page.fill("#mapip", "198.18.201.0/24")
+        page.get_by_role("button", name="Map", exact=True).click()
+        expect(row).to_contain_text("198.18.201.0/24")
+        page.screenshot(path=f"{out}/5-route-mapped.png", full_page=True)
+        r = subprocess.run(["curl", "-s", "-m5", "http://198.18.201.1/"], capture_output=True, text=True)
+        check("router-b behind the mapped prefix", r.stdout.strip(), "router-b")
+        row.get_by_role("button", name="Unmap").click()
+        expect(row).to_contain_text("auto-mapped")
+
     mobile = browser.new_page(viewport={"width": 390, "height": 844})
     mobile.goto(UI)
     mobile.wait_for_selector("#devices tr")

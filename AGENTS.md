@@ -49,7 +49,13 @@ no personal paths. Commit locally only; pushing is done by the maintainer.
      ends on the host (local delivery to the transit address, never forwarded), from the
      peer's routed IP; the tailnet's ACLs decide, unrouted peers stay out; PeerAPI stays
      with Tailscale (`TestInbound` on both backends and macOS, `TestIsolation/peers`)
-   - [ ] Remaining conflicts: subnet routes (same merge model), exit nodes
+   - [x] Subnet routes, same merge model per prefix: the first tailnet keeps a route,
+     overlapping routes of other tailnets and routes that overlap a network of the host
+     (`preflight.HostNetworks`) get a pool block of the same size (netmap) or stay
+     unrouted; `tailweave map <tailnet> <route> [<block>]`. 4via6 routes are routed as
+     they are over IPv6 (`transit6`), never remapped, with `a-b-c-d-via-N.<domain>`
+     names (`TestSubnets`, `TestVia` on both backends)
+   - [ ] Remaining conflicts: exit nodes
 3. **macOS version** *(in progress)*
    - [x] Backend `tsnet` (`internal/engine`, `internal/router`, `internal/hostnet`): one
      in-process tsnet engine per tailnet, each with an in-memory TUN, behind a userspace
@@ -117,8 +123,10 @@ Keep this list current when finishing or starting a step.
   100.64.0.1, peer-a2/peer-b2 100.64.0.2, routers .3, exit nodes .4. peer-b3 exists only
   in tailnet B and starts last, so its IP does not collide with a peer in A.
 - Scenarios: `subnets` (router-a and router-b both route 10.99.0.0/24 and answer on
-  10.99.0.1; router-b also routes the Lima LAN 192.168.104.0/24, user-v2), `exit-nodes` (exit-a,
-  exit-b), `dns-suffix` (both tailnets use base domain a.lab).
+  10.99.0.1; router-b also routes the Lima LAN 192.168.104.0/24, user-v2; the same /24
+  as 4via6, site 7 on router-a and site 8 on router-b), `exit-nodes` (exit-a,
+  exit-b), `dns-suffix` (both tailnets use base domain a.lab). Tests that need a
+  scenario call `labtest.RequireScenario`, which also accepts `all`.
 - Peer test services: HTTP :80 and UDP :8 return the peer name, UDP :7 echo,
   iperf3 server. Use them to tell which tailnet answered. TCP :9 is a probe that connects
   back on request (`lab/peer/probe.sh`: send `tcp|udp|ping <IPv4> <port>`, get the answer),
@@ -166,7 +174,7 @@ Keep this list current when finishing or starting a step.
 - Pass auth keys to `tailscale up` as `--auth-key=file:...` so they don't show up in `ps`.
 - Do not name host interfaces `tw-*` other than the playground veths (iptables match `tw-+`).
   tailweave's DNS link is `tailweave0` and its veths are `twh<i>` for that reason.
-- tailweave owns routing table 5180 (ip rule pref 5180, `iif lo`, so only locally
+- tailweave owns routing table 5180 (IPv4 and IPv6; ip rule pref 5180, `iif lo`, so only locally
   generated traffic uses it; tailscaled uses table 52 and prefs 5210-5270, so never touch
   rules by priority alone, delete the exact `pref 5180 iif lo lookup 5180`), nft table `inet tailweave` in each namespace (DNAT, forward
   filter that drops new traffic from the tailnet, masquerade) and nft table `ip tailweave`
@@ -176,6 +184,20 @@ Keep this list current when finishing or starting a step.
   exit; the tailscaled state in `<stateDir>/tailnets/<name>` stays. It also sets the
   host's `net.ipv4.ip_forward=1` and leaves it on. tailscaled's own netfilter rules in
   the namespaces stay on and let the forwarded host traffic through.
+- Subnet routes: tailscaled runs with `--accept-routes` (set again at every start, for
+  state from older versions), tsnet with `RouteAll`. In each namespace, a rule at pref
+  5200 (`lookup main suppress_prefixlength 0`, IPv4 and IPv6) keeps the veth's network
+  out of table 52. The host routes each routed prefix into its namespace (table 5180),
+  remapped blocks are netmapped there (`dnat ip prefix to`). Inbound only works from
+  peers on netns; the stateless tsnet router also lets hosts behind a routed subnet
+  route in.
+- IPv6 only carries 4via6 routes, and only if the host has IPv6
+  (`/proc/sys/net/ipv6/conf/all/disable_ipv6`): netns gives the veths /126s from
+  `transit6` (fd74:7765:6176::/64) and turns on IPv6 forwarding only in the namespace
+  (on the host it would turn off router advertisements), without an IPv6 default route
+  there, so tailscaled stays on IPv4. Table 5180 and the rule at pref 5180 exist for
+  IPv6 too; netns marks `fd7a:115c:a1e0:b1a::/64` unreachable there, tsnet routes it
+  into the TUN, which has the first address of `transit6`.
 - Inbound, netns backend: the namespace DNATs new TCP/UDP/ICMP on `ts0` for its self IP
   to the host's `twh<i>` address (except tailscaled's PeerAPI port, from the status'
   `PeerAPIURL`), forwards it to `twn<i>` only from routed peers (`ct status dnat`), and

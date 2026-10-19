@@ -48,7 +48,8 @@ tailnets do not reach each other, and the LAN does not reach them](docs/how-it-w
 - **One merged address space.** Every peer keeps its real tailnet IP and is routed into
   the right instance. Only when the same IP exists in several tailnets is a device
   remapped: automatically (the tailnet listed first keeps the IP, the others get an
-  address from `198.18.0.0/15`) or by hand (`tailweave map`).
+  address from `198.18.0.0/15`) or by hand (`tailweave map`). Subnet routes follow the
+  same model, with blocks of the same size; 4via6 routes work as they are.
 - **Own DNS service** replacing MagicDNS: names always resolve to the IP the device is
   actually reachable at, so collisions only matter when you type raw IPs.
 - **Daemon with a CLI:** `tailweave login <name>` adds a tailnet (web link or
@@ -93,8 +94,8 @@ any two VPNs running side by side.
 | Conflict | Resolution options |
 | --- | --- |
 | Same IPs in several tailnets | Remap automatically, or map a device to another IP by hand |
-| Overlapping subnet routes | Ignore or map the route |
-| Subnet route equals the local LAN | Ignore or map the route |
+| Overlapping subnet routes | Remap automatically to a pool block of the same size, or map the route by hand |
+| Subnet route overlaps the local LAN | Remap like an overlapping route; the LAN stays where it is |
 | MagicDNS (`100.100.100.100`) | tailweave's DNS service takes over |
 | Several exit nodes | Allow only one |
 | Same DNS names | The tailnet listed first wins |
