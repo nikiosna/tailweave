@@ -6,7 +6,11 @@ import (
 	"net/http"
 	"net/netip"
 	"path/filepath"
+	"slices"
+	"strings"
 	"testing"
+
+	"github.com/Nikiosna/tailweave/internal/weave"
 )
 
 // Trimmed output of /localapi/v0/status from the lab.
@@ -19,7 +23,10 @@ const statusJSON = `{
     "PeerAPIURL": ["http://100.64.0.6:63847", "http://[fd7a:115c:a1e0::6]:56208"]},
   "Peer": {
     "nodekey:aa": {"ID": "2", "HostName": "peer-b2", "DNSName": "peer-b2.b.lab.",
-      "TailscaleIPs": ["100.64.0.2", "fd7a:115c:a1e0::2"], "Online": true, "PrimaryRoutes": null}
+      "TailscaleIPs": ["100.64.0.2", "fd7a:115c:a1e0::2"], "Online": true, "PrimaryRoutes": null},
+    "nodekey:bb": {"ID": "3", "HostName": "router-b", "DNSName": "router-b.b.lab.",
+      "TailscaleIPs": ["100.64.0.3", "fd7a:115c:a1e0::3"], "Online": true,
+      "PrimaryRoutes": ["10.99.0.0/24", "fd7a:115c:a1e0:b1a:0:8:a63:0/120", "0.0.0.0/0", "::/0", "fd00::/64"]}
   }
 }`
 
@@ -44,12 +51,18 @@ func TestStatus(t *testing.T) {
 		t.Fatal(err)
 	}
 	tn := st.Tailnet
-	if tn.Name != "b" || tn.Domain != "b.lab" || tn.Self.Name != "dut-b" || tn.PeerAPIPort != 63847 || len(tn.Peers) != 1 {
+	if tn.Name != "b" || tn.Domain != "b.lab" || tn.Self.Name != "dut-b" || tn.PeerAPIPort != 63847 || len(tn.Peers) != 2 {
 		t.Fatalf("tailnet = %+v", tn)
 	}
+	slices.SortFunc(tn.Peers, func(a, b weave.Peer) int { return strings.Compare(a.ID, b.ID) })
 	p := tn.Peers[0]
-	if p.ID != "2" || p.Name != "peer-b2" || p.DNSName != "peer-b2.b.lab." || p.IPv4() != netip.MustParseAddr("100.64.0.2") || !p.Online {
+	if p.ID != "2" || p.Name != "peer-b2" || p.DNSName != "peer-b2.b.lab." || p.IPv4() != netip.MustParseAddr("100.64.0.2") || !p.Online || p.Routes != nil {
 		t.Errorf("peer = %+v", p)
+	}
+	// Only IPv4 subnet routes and 4via6 routes; exit routes and other IPv6 routes are left out.
+	want := []netip.Prefix{netip.MustParsePrefix("10.99.0.0/24"), netip.MustParsePrefix("fd7a:115c:a1e0:b1a:0:8:a63:0/120")}
+	if r := tn.Peers[1].Routes; !slices.Equal(r, want) {
+		t.Errorf("router routes = %v, want %v", r, want)
 	}
 }
 

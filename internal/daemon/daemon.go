@@ -32,6 +32,10 @@ import (
 // PollInterval is how often the tailnet instances are asked for their peers.
 const PollInterval = 2 * time.Second
 
+// hostNetsInterval is how often the host's own networks are looked at again while a
+// tailnet has subnet routes.
+const hostNetsInterval = 30 * time.Second
+
 // Daemon is a running tailweave.
 type Daemon struct {
 	cfg Config
@@ -48,6 +52,9 @@ type Daemon struct {
 	tailnets map[string]weave.Tailnet // last good status per running tailnet
 	status   map[string]tailnetStatus
 	plan     weave.Plan
+
+	hostNets   []netip.Prefix // networks of the host, which subnet routes must not take over
+	hostNetsAt time.Time
 }
 
 // tailnetStatus is the login state of a tailnet's instance, as of the last poll.
@@ -284,5 +291,30 @@ func (d *Daemon) compute() weave.Plan {
 			tns = append(tns, tn)
 		}
 	}
-	return weave.Compute(tns, d.st.Mappings, weave.Options{AutoMap: d.st.AutoMap, Pool: d.cfg.Pool})
+	opt := weave.Options{AutoMap: d.st.AutoMap, Pool: d.cfg.Pool}
+	if slices.ContainsFunc(tns, hasRoutes) {
+		opt.Exclude = append([]netip.Prefix{netcfg.CGNAT, d.cfg.Transit, netip.PrefixFrom(d.cfg.DNS, 32)},
+			d.hostNetworks()...)
+	}
+	return weave.Compute(tns, d.st.Mappings, opt)
+}
+
+func hasRoutes(tn weave.Tailnet) bool {
+	return slices.ContainsFunc(tn.Peers, func(p weave.Peer) bool { return len(p.Routes) > 0 })
+}
+
+// hostNetworks returns the host's own networks, looked at again every hostNetsInterval.
+// Callers hold d.mu.
+func (d *Daemon) hostNetworks() []netip.Prefix {
+	if time.Since(d.hostNetsAt) < hostNetsInterval {
+		return d.hostNets
+	}
+	s, err := preflight.Collect()
+	if err != nil {
+		slog.Warn("cannot read the host's networks; keeping the last ones", "err", err)
+	} else {
+		d.hostNets = preflight.HostNetworks(s, d.claims())
+	}
+	d.hostNetsAt = time.Now()
+	return d.hostNets
 }

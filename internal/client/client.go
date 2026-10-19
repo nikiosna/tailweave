@@ -59,6 +59,17 @@ func (c *Client) Map(ctx context.Context, tailnet, peerID string, ip netip.Addr)
 	return c.do(ctx, http.MethodPost, "/api/mappings", daemon.MappingRequest{Tailnet: tailnet, PeerID: peerID, IP: ip})
 }
 
+// MapRoute routes a tailnet's subnet route at prefix; without a valid prefix the daemon
+// picks a free pool block.
+func (c *Client) MapRoute(ctx context.Context, tailnet string, route, prefix netip.Prefix) (daemon.State, error) {
+	return c.do(ctx, http.MethodPost, "/api/mappings", daemon.MappingRequest{Tailnet: tailnet, Route: route, Prefix: prefix})
+}
+
+// UnmapRoute removes the mapping of a tailnet's subnet route.
+func (c *Client) UnmapRoute(ctx context.Context, tailnet string, route netip.Prefix) (daemon.State, error) {
+	return c.do(ctx, http.MethodDelete, "/api/routes/"+url.PathEscape(tailnet)+"/"+route.String(), nil)
+}
+
 // Unmap removes a device's mapping.
 func (c *Client) Unmap(ctx context.Context, tailnet, peerID string) (daemon.State, error) {
 	return c.do(ctx, http.MethodDelete, "/api/mappings/"+url.PathEscape(tailnet)+"/"+url.PathEscape(peerID), nil)

@@ -42,6 +42,8 @@ type node struct {
 	TailscaleIPs []netip.Addr
 	PeerAPIURL   []string // only set for Self, e.g. "http://100.64.0.3:41234"
 	Online       bool
+	// PrimaryRoutes are the subnet routes the node is the active router for.
+	PrimaryRoutes []netip.Prefix
 }
 
 type status struct {
@@ -123,7 +125,13 @@ func peerAPIPort(n *node, ip netip.Addr) uint16 {
 }
 
 func peer(n *node) weave.Peer {
-	return weave.Peer{ID: n.ID, Name: machineName(n), DNSName: n.DNSName, IPs: n.TailscaleIPs, Online: n.Online}
+	p := weave.Peer{ID: n.ID, Name: machineName(n), DNSName: n.DNSName, IPs: n.TailscaleIPs, Online: n.Online}
+	for _, r := range n.PrimaryRoutes {
+		if weave.Routable(r) {
+			p.Routes = append(p.Routes, r)
+		}
+	}
+	return p
 }
 
 // machineName is the name the tailnet knows n by, like `tailscale status` shows it: the

@@ -37,11 +37,14 @@ type TailnetState struct {
 	LoginError  string     `json:"loginError,omitempty"` // why the last login attempt failed
 }
 
-// MappingRequest is the body of POST /api/mappings. Without IP, a free pool address is used.
+// MappingRequest is the body of POST /api/mappings. It maps a device (PeerID) to IP, or
+// a subnet route (Route) to Prefix. Without IP or Prefix, free pool addresses are used.
 type MappingRequest struct {
-	Tailnet string     `json:"tailnet"`
-	PeerID  string     `json:"peer"`
-	IP      netip.Addr `json:"ip"`
+	Tailnet string       `json:"tailnet"`
+	PeerID  string       `json:"peer,omitempty"`
+	IP      netip.Addr   `json:"ip,omitzero"`
+	Route   netip.Prefix `json:"route,omitzero"`
+	Prefix  netip.Prefix `json:"prefix,omitzero"`
 }
 
 // Options is the body of PUT /api/options; fields left out stay as they are.
@@ -89,7 +92,12 @@ func (d *Daemon) Handler() http.Handler {
 		if !readJSON(w, r, &m) {
 			return
 		}
-		d.change(w, r, func() error { return d.setMapping(m) })
+		d.change(w, r, func() error {
+			if m.Route.IsValid() {
+				return d.setRouteMapping(m)
+			}
+			return d.setMapping(m)
+		})
 	})
 	mux.HandleFunc("POST /api/tailnets", func(w http.ResponseWriter, r *http.Request) {
 		var req LoginRequest
@@ -105,16 +113,25 @@ func (d *Daemon) Handler() http.Handler {
 		d.tailnetChange(w, r, func() error { return d.remove(r.PathValue("name")) })
 	})
 	mux.HandleFunc("DELETE /api/mappings/{tailnet}/{peer}", func(w http.ResponseWriter, r *http.Request) {
-		key := weave.Mapping{Tailnet: r.PathValue("tailnet"), PeerID: r.PathValue("peer")}
+		tailnet, peer := r.PathValue("tailnet"), r.PathValue("peer")
 		d.change(w, r, func() error {
-			n := len(d.st.Mappings)
-			d.st.Mappings = slices.DeleteFunc(d.st.Mappings, func(m weave.Mapping) bool {
-				return m.Tailnet == key.Tailnet && m.PeerID == key.PeerID
+			return d.deleteMapping(func(m weave.Mapping) bool {
+				return m.Tailnet == tailnet && m.PeerID == peer && !m.Route.IsValid()
 			})
-			if len(d.st.Mappings) == n {
-				return errNotFound
-			}
-			return nil
+		})
+	})
+	// The route is the rest of the path, e.g. /api/routes/b/10.99.0.0/24.
+	mux.HandleFunc("DELETE /api/routes/{tailnet}/{route...}", func(w http.ResponseWriter, r *http.Request) {
+		tailnet := r.PathValue("tailnet")
+		route, err := netip.ParsePrefix(r.PathValue("route"))
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		d.change(w, r, func() error {
+			return d.deleteMapping(func(m weave.Mapping) bool {
+				return m.Tailnet == tailnet && m.Route.Masked() == route.Masked()
+			})
 		})
 	})
 	return d.guard(mux)
@@ -186,6 +203,54 @@ func (d *Daemon) setMapping(req MappingRequest) error {
 	d.st.Mappings = append(slices.DeleteFunc(d.st.Mappings, func(m weave.Mapping) bool {
 		return m.Tailnet == req.Tailnet && m.PeerID == req.PeerID
 	}), weave.Mapping{Tailnet: req.Tailnet, PeerID: req.PeerID, IP: req.IP})
+	return nil
+}
+
+// setRouteMapping replaces the mapping of a subnet route with a manual one. Callers hold d.mu.
+func (d *Daemon) setRouteMapping(req MappingRequest) error {
+	req.Route = req.Route.Masked()
+	var cur *weave.Route
+	for _, dev := range d.plan.Devices {
+		for i, r := range dev.Routes {
+			if dev.Tailnet == req.Tailnet && r.Prefix == req.Route {
+				cur = &dev.Routes[i]
+			}
+		}
+	}
+	if cur == nil {
+		return errNotFound
+	}
+	if !req.Route.Addr().Is4() {
+		return fmt.Errorf("only IPv4 routes can be mapped; %s is unique already", req.Route)
+	}
+	if !req.Prefix.IsValid() {
+		req.Prefix = d.plan.SuggestPrefix(d.cfg.Pool, req.Route.Bits())
+		if !req.Prefix.IsValid() {
+			return fmt.Errorf("address pool %s has no free /%d", d.cfg.Pool, req.Route.Bits())
+		}
+	}
+	req.Prefix = req.Prefix.Masked()
+	if req.Prefix.Bits() != req.Route.Bits() {
+		return fmt.Errorf("%s and %s differ in size", req.Prefix, req.Route)
+	}
+	// The route's own current mapping does not block its block (auto -> manual).
+	own := cur.Mapping != nil && cur.Mapping.Prefix == req.Prefix
+	if !own && !d.plan.FreePrefix(req.Prefix) {
+		return fmt.Errorf("%s is not free", req.Prefix)
+	}
+	d.st.Mappings = append(slices.DeleteFunc(d.st.Mappings, func(m weave.Mapping) bool {
+		return m.Tailnet == req.Tailnet && m.Route.Masked() == req.Route
+	}), weave.Mapping{Tailnet: req.Tailnet, Route: req.Route, Prefix: req.Prefix})
+	return nil
+}
+
+// deleteMapping removes the mappings matching del. Callers hold d.mu.
+func (d *Daemon) deleteMapping(del func(weave.Mapping) bool) error {
+	n := len(d.st.Mappings)
+	d.st.Mappings = slices.DeleteFunc(d.st.Mappings, del)
+	if len(d.st.Mappings) == n {
+		return errNotFound
+	}
 	return nil
 }
 

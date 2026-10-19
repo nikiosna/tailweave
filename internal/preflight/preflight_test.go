@@ -280,3 +280,24 @@ utun4: flags=8051<UP,POINTOPOINT,RUNNING,MULTICAST> mtu 1280
 		t.Errorf("interfaces = %+v", ifs)
 	}
 }
+
+func TestHostNetworks(t *testing.T) {
+	s := with(lan, func(s *Snapshot) {
+		s.Routes = append(s.Routes,
+			Route{Prefix: pfx("10.8.0.0/16"), Dev: "wg0", Table: "main", Type: "unicast"},
+			Route{Prefix: pfx("10.99.0.0/24"), Dev: "tailweave0", Table: "5180", Type: "unicast"},
+			Route{Prefix: pfx("198.18.0.0/15"), Dev: "twh0", Table: "main", Type: "unicast"},
+			Route{Prefix: pfx("0.0.0.0/1"), Dev: "tun0", Table: "main", Type: "unicast"},
+			Route{Prefix: pfx("10.50.0.0/16"), Table: "main", Type: "throw"},
+			Route{Prefix: pfx("172.16.0.0/12"), Dev: "eth1", Table: "100", Type: "unicast"},
+		)
+		s.Interfaces = append(s.Interfaces,
+			Interface{Name: "docker0", Addrs: []netip.Prefix{pfx("172.17.0.1/16")}},
+			Interface{Name: "utun5", Addrs: []netip.Prefix{pfx("10.201.0.1/32")}},
+		)
+	})
+	want := []netip.Prefix{pfx("127.0.0.0/8"), pfx("192.168.1.0/24"), pfx("172.17.0.0/16"), pfx("10.8.0.0/16")}
+	if got := HostNetworks(s, claims); !slices.Equal(got, want) {
+		t.Errorf("HostNetworks = %v, want %v", got, want)
+	}
+}

@@ -6,6 +6,11 @@
 // pool) or left unrouted until the user maps a device by hand. MagicDNS names always
 // resolve to the IP that is actually routed for a device.
 //
+// Subnet routes follow the same model per prefix: the tailnet listed first keeps a
+// route, overlapping routes of other tailnets get a block of the same size from the pool
+// (or stay unrouted). Routes that overlap a network of this machine are never routed as
+// they are. 4via6 routes are unique by design and are never remapped.
+//
 // The package is pure: it computes a Plan from the tailnets' peers, the stored mappings
 // and the options. Applying the plan is up to the caller.
 package weave
@@ -24,6 +29,7 @@ type Peer struct {
 	Name    string // host name
 	DNSName string // MagicDNS name, e.g. "peer-a1.a.lab."
 	IPs     []netip.Addr
+	Routes  []netip.Prefix // subnet routes this peer is the primary router for
 	Online  bool
 }
 
@@ -46,20 +52,27 @@ type Tailnet struct {
 	Peers       []Peer
 }
 
-// Mapping gives a device an IP on this machine other than its real tailnet IP.
+// Mapping gives a device an IP on this machine other than its real tailnet IP, or a
+// subnet route (Route) a prefix of the same size (Prefix). Route mappings belong to the
+// tailnet, not to a router, so they survive a failover to another subnet router.
 type Mapping struct {
-	Tailnet string     `json:"tailnet"`
-	PeerID  string     `json:"peer"`
-	IP      netip.Addr `json:"ip"`
-	Auto    bool       `json:"auto,omitempty"` // created by auto-remapping, not by the user
+	Tailnet string       `json:"tailnet"`
+	PeerID  string       `json:"peer,omitempty"`
+	IP      netip.Addr   `json:"ip,omitzero"`
+	Route   netip.Prefix `json:"route,omitzero"`
+	Prefix  netip.Prefix `json:"prefix,omitzero"`
+	Auto    bool         `json:"auto,omitempty"` // created by auto-remapping, not by the user
 }
 
 func (m Mapping) key() peerKey { return peerKey{m.Tailnet, m.PeerID} }
 
 // Options control how collisions are handled.
 type Options struct {
-	AutoMap bool         // remap colliding devices automatically
+	AutoMap bool         // remap colliding devices and routes automatically
 	Pool    netip.Prefix // addresses for auto-mappings and suggestions
+	// Exclude are networks of this machine (LAN, tailweave's own ranges) that subnet
+	// routes must not take over. The pool is always excluded.
+	Exclude []netip.Prefix
 }
 
 // Target is where traffic to a routed IP goes: a tailnet and the device's real IP there.
@@ -78,6 +91,20 @@ type Device struct {
 	RealIP   netip.Addr `json:"realIP"`
 	RoutedIP netip.Addr `json:"routedIP"` // zero if the device is not reachable from this machine
 	Mapping  *Mapping   `json:"mapping,omitempty"`
+	Routes   []Route    `json:"routes,omitempty"` // subnet routes of the device
+}
+
+// Route is a subnet route of a device and where it is reachable on this machine.
+type Route struct {
+	Prefix  netip.Prefix `json:"prefix"`
+	Routed  netip.Prefix `json:"routed,omitzero"` // zero if the route is not reachable
+	Mapping *Mapping     `json:"mapping,omitempty"`
+}
+
+// SubnetTarget is where traffic to a routed prefix goes: a tailnet and the real route there.
+type SubnetTarget struct {
+	Tailnet string
+	Prefix  netip.Prefix
 }
 
 // Conflict kinds.
@@ -85,6 +112,8 @@ const (
 	ConflictIP      = "ip"      // same IP in several tailnets
 	ConflictName    = "name"    // same MagicDNS name in several tailnets
 	ConflictMapping = "mapping" // a stored mapping cannot be applied
+	ConflictRoute   = "route"   // overlapping subnet routes in several tailnets
+	ConflictLocal   = "local"   // a subnet route overlaps a network of this machine
 )
 
 // DeviceRef identifies a device in a conflict.
@@ -97,7 +126,7 @@ type DeviceRef struct {
 // Conflict is something the user may want to look at.
 type Conflict struct {
 	Kind     string      `json:"kind"`
-	Key      string      `json:"key"` // the IP or name concerned
+	Key      string      `json:"key"` // the IP, name or prefix concerned
 	Devices  []DeviceRef `json:"devices"`
 	Resolved bool        `json:"resolved"` // handled automatically (auto-mapping, priority)
 	Message  string      `json:"message"`
@@ -111,15 +140,19 @@ type Local struct {
 
 // Plan is the desired state for this machine.
 type Plan struct {
-	Routes    map[netip.Addr]Target // IP on this machine -> tailnet and real IP
-	Local     map[string]Local      // tailnet -> this machine's address there
-	Names     map[string]netip.Addr // lowercase FQDN with trailing dot -> routed IP
-	Domains   []string              // MagicDNS suffixes of all tailnets, deduplicated
-	Devices   []Device              // all peers, in tailnet priority order and by IP
-	Mappings  []Mapping             // mappings to store: manual ones plus active auto ones
+	Routes    map[netip.Addr]Target         // IP on this machine -> tailnet and real IP
+	Subnets   map[netip.Prefix]SubnetTarget // prefix on this machine -> tailnet and real route
+	Via       map[string][]netip.Prefix     // MagicDNS suffix -> routed 4via6 prefixes
+	Local     map[string]Local              // tailnet -> this machine's address there
+	Names     map[string]netip.Addr         // lowercase FQDN with trailing dot -> routed IP
+	Domains   []string                      // MagicDNS suffixes of all tailnets, deduplicated
+	Devices   []Device                      // all peers, in tailnet priority order and by IP
+	Mappings  []Mapping                     // mappings to store: manual ones plus active auto ones
 	Conflicts []Conflict
 
-	real map[netip.Addr]bool // every IPv4 used by a tailnet, including self IPs
+	real    map[netip.Addr]bool // every IPv4 used by a tailnet, including self IPs
+	exclude []netip.Prefix      // see Options
+	pool    netip.Prefix
 }
 
 type peerKey struct{ tailnet, id string }
@@ -128,8 +161,9 @@ type peerKey struct{ tailnet, id string }
 // tailnet listed first keeps the IP or the name.
 func Compute(tailnets []Tailnet, mappings []Mapping, opt Options) Plan {
 	real := map[netip.Addr]bool{}
-	p := Plan{Routes: map[netip.Addr]Target{}, Local: map[string]Local{},
-		Names: map[string]netip.Addr{}, real: real}
+	p := Plan{Routes: map[netip.Addr]Target{}, Subnets: map[netip.Prefix]SubnetTarget{},
+		Via: map[string][]netip.Prefix{}, Local: map[string]Local{}, Names: map[string]netip.Addr{}, real: real,
+		exclude: opt.Exclude, pool: opt.Pool.Masked()}
 
 	peers := map[peerKey]Peer{}
 	for _, tn := range tailnets {
@@ -152,7 +186,12 @@ func Compute(tailnets []Tailnet, mappings []Mapping, opt Options) Plan {
 	active := map[peerKey]Mapping{}
 	used := map[netip.Addr]bool{} // mapped IPs in use
 	autoOld := map[peerKey]Mapping{}
+	var routeMaps []Mapping
 	for _, m := range mappings {
+		if m.Route.IsValid() {
+			routeMaps = append(routeMaps, m)
+			continue
+		}
 		if m.Auto {
 			autoOld[m.key()] = m
 			continue
@@ -209,6 +248,11 @@ func Compute(tailnets []Tailnet, mappings []Mapping, opt Options) Plan {
 	for _, m := range autoOld {
 		reserved[m.IP] = true
 	}
+	// Pool blocks that route mappings may keep are off limits for devices.
+	blocks := routeBlocks(routeMaps, opt.AutoMap)
+	inBlock := func(ip netip.Addr) bool {
+		return slices.ContainsFunc(blocks, func(b netip.Prefix) bool { return b.Contains(ip) })
+	}
 
 	var autoNew []Mapping
 	for _, a := range order {
@@ -232,7 +276,7 @@ func Compute(tailnets []Tailnet, mappings []Mapping, opt Options) Plan {
 		for _, k := range ks[1:] {
 			m, ok := autoOld[k]
 			if !ok {
-				ip := nextFree(opt.Pool, func(ip netip.Addr) bool { return real[ip] || used[ip] || reserved[ip] })
+				ip := nextFree(opt.Pool, func(ip netip.Addr) bool { return real[ip] || used[ip] || reserved[ip] || inBlock(ip) })
 				if !ip.IsValid() {
 					c.Resolved = false
 					c.Message = "address pool exhausted, some devices are not routed"
@@ -252,6 +296,8 @@ func Compute(tailnets []Tailnet, mappings []Mapping, opt Options) Plan {
 		p.Routes[m.IP] = Target{k.tailnet, peers[k].IPv4()}
 	}
 
+	routes := p.addRoutes(tailnets, routeMaps, opt, used)
+
 	// Devices and names, in priority order.
 	nameOwner := map[string]peerKey{}
 	nameConflicts := map[string]*Conflict{}
@@ -267,6 +313,7 @@ func Compute(tailnets []Tailnet, mappings []Mapping, opt Options) Plan {
 			} else if t, ok := p.Routes[d.RealIP]; ok && t.Tailnet == tn.Name {
 				d.RoutedIP = d.RealIP
 			}
+			d.Routes = routes[k]
 			p.Devices = append(p.Devices, d)
 
 			name := normName(pe.DNSName)
@@ -309,7 +356,12 @@ func (p Plan) Free(ip netip.Addr) bool {
 		return false
 	}
 	for _, m := range p.Mappings {
-		if m.IP == ip {
+		if m.IP == ip || m.Prefix.Contains(ip) {
+			return false
+		}
+	}
+	for s := range p.Subnets {
+		if s.Contains(ip) {
 			return false
 		}
 	}

@@ -64,23 +64,7 @@ func Check(s Snapshot, c Claims) error {
 	if c.DNS.IsValid() {
 		claims = append(claims, netip.PrefixFrom(c.DNS, c.DNS.BitLen()))
 	}
-	own := func(name string) bool {
-		for _, p := range c.OwnInterfaces {
-			if p != "" && strings.HasPrefix(name, p) {
-				return true
-			}
-		}
-		return false
-	}
-	ownAddr := map[string]bool{}
-	for _, i := range s.Interfaces {
-		for _, a := range i.Addrs {
-			if c.OwnAddr.IsValid() && a.Addr() == c.OwnAddr {
-				ownAddr[i.Name] = true
-			}
-		}
-	}
-	isOwn := func(name string) bool { return name != "" && (own(name) || ownAddr[name]) }
+	isOwn := c.own(s)
 
 	// Conflicts with the same key are reported once, so a client with many peer routes
 	// does not drown the message.
@@ -167,6 +151,55 @@ func Check(s Snapshot, c Claims) error {
 		b.WriteString(". Stop the other VPN client or proxy before starting tailweave")
 	}
 	return fmt.Errorf("%s", b.String())
+}
+
+// own returns whether an interface of the snapshot belongs to tailweave.
+func (c Claims) own(s Snapshot) func(string) bool {
+	ownAddr := map[string]bool{}
+	for _, i := range s.Interfaces {
+		for _, a := range i.Addrs {
+			if c.OwnAddr.IsValid() && a.Addr() == c.OwnAddr {
+				ownAddr[i.Name] = true
+			}
+		}
+	}
+	return func(name string) bool {
+		if name == "" {
+			return false
+		}
+		for _, p := range c.OwnInterfaces {
+			if p != "" && strings.HasPrefix(name, p) {
+				return true
+			}
+		}
+		return ownAddr[name]
+	}
+}
+
+// HostNetworks returns the networks this host reaches on its own, without tailweave: the
+// networks of its interfaces and its routes in the main table, except default routes and
+// full-tunnel halves. Subnet routes of a tailnet must not take them over.
+func HostNetworks(s Snapshot, c Claims) []netip.Prefix {
+	isOwn := c.own(s)
+	var ns []netip.Prefix
+	add := func(p netip.Prefix) {
+		if p = p.Masked(); p.Bits() > 1 && !slices.Contains(ns, p) {
+			ns = append(ns, p)
+		}
+	}
+	for _, i := range s.Interfaces {
+		if !isOwn(i.Name) {
+			for _, a := range i.Addrs {
+				add(a)
+			}
+		}
+	}
+	for _, r := range s.Routes {
+		if (r.Table == "" || r.Table == "main") && r.Type != "throw" && !isOwn(r.Dev) {
+			add(r.Prefix)
+		}
+	}
+	return ns
 }
 
 // tailscale reports whether the snapshot shows signs of a running Tailscale client.
