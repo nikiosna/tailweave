@@ -22,6 +22,16 @@ func resolve(t *testing.T, name string) (string, bool) {
 	return out, strings.Contains(out, "ip_address:")
 }
 
+// resolvesAAAA reports whether the system resolver asks for AAAA records in domain:
+// configd only lets it do so while the Mac has IPv6 connectivity.
+func resolvesAAAA(t *testing.T, domain string) bool {
+	t.Helper()
+	out := labtest.Run(t, "scutil", "--dns")
+	_, after, ok := strings.Cut(out, "domain   : "+domain+"\n")
+	block, _, _ := strings.Cut(after, "\n\n")
+	return ok && strings.Contains(block, "Request AAAA records")
+}
+
 // assertNoInstances has nothing to check: the tsnet backend runs its engines in-process.
 func assertNoInstances(t *testing.T) {}
 

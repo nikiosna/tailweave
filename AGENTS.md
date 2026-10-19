@@ -197,7 +197,10 @@ Keep this list current when finishing or starting a step.
   (on the host it would turn off router advertisements), without an IPv6 default route
   there, so tailscaled stays on IPv4. Table 5180 and the rule at pref 5180 exist for
   IPv6 too; netns marks `fd7a:115c:a1e0:b1a::/64` unreachable there, tsnet routes it
-  into the TUN, which has the first address of `transit6`.
+  into the TUN, which has the first address of `transit6`. macOS asks resolvers for
+  AAAA only with IPv6 connectivity (`scutil --dns` flags; neither `/etc/resolver` nor
+  `__FLAGS__` in the DNS dictionary change that), so 4via6 names do not resolve in the
+  macOS VM and `TestVia` skips them there.
 - Inbound, netns backend: the namespace DNATs new TCP/UDP/ICMP on `ts0` for its self IP
   to the host's `twh<i>` address (except tailscaled's PeerAPI port, from the status'
   `PeerAPIURL`), forwards it to `twn<i>` only from routed peers (`ct status dnat`), and

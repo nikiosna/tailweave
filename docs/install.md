@@ -154,7 +154,9 @@ tailweave.
   cannot run next to tailweave; it refuses to start until they are gone.
 - **No exit nodes** yet.
 - **IPv6 only for 4via6 routes.** Peers' own IPv6 addresses are not routed, and 4via6
-  routes that two tailnets both use stay with the tailnet listed first.
+  routes that two tailnets both use stay with the tailnet listed first. On macOS, names
+  like `10-0-0-7-via-7.<domain>` only resolve while the Mac has IPv6 connectivity (the
+  system does not ask for IPv6 addresses otherwise); the addresses themselves always work.
 - **Hosts behind subnet routes cannot connect to this machine** with the Linux default
   backend (`netns`); only peers can. With `tsnet` they can, if their subnet router
   does not masquerade them.

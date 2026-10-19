@@ -120,6 +120,15 @@ func TestVia(t *testing.T) {
 	for _, tc := range []struct{ host, want string }{
 		{"[fd7a:115c:a1e0:b1a:0:7:a63:1]", "router-a"},
 		{"[fd7a:115c:a1e0:b1a:0:8:a63:1]", "router-b"},
+	} {
+		if got := waitCurl(t, tc.host, tc.want); got != tc.want {
+			t.Errorf("curl %s = %q, want %q", tc.host, got, tc.want)
+		}
+	}
+	if !resolvesAAAA(t, "a.lab") {
+		t.Skip("the system resolver does not ask for AAAA records here (macOS without IPv6 connectivity)")
+	}
+	for _, tc := range []struct{ host, want string }{
 		{"10-99-0-1-via-7.a.lab", "router-a"},
 		{"10-99-0-1-via-8.b.lab", "router-b"},
 	} {

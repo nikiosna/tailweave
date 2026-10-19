@@ -21,6 +21,9 @@ func resolve(t *testing.T, name string) (string, bool) {
 	return out, err == nil
 }
 
+// resolvesAAAA reports whether the system resolver asks for AAAA records in domain.
+func resolvesAAAA(t *testing.T, domain string) bool { return true }
+
 func assertNoInstances(t *testing.T) {
 	t.Helper()
 	if out := labtest.Run(t, "ip", "netns", "list"); strings.Contains(out, "tailweave-") {
