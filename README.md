@@ -5,12 +5,12 @@ tailweave detects conflicts between the tailnets, shows them, and lets you resol
 them.
 
 > [!WARNING]
-> **Status: heavily experimental and untested.** This is just another AI-created code
-> project. It has not been properly tested in real-world scenarios yet! Manage your
+> **Status: heavily experimental.** This is just another AI-created code
+> project. So far, I have only tested the macOS version in real-world use. Manage your
 > expectations accordingly.
 >
-> Development is AI-driven and validated only by tests in VMs: a Linux VM running a lab
-> with two headscale servers and their peers, and a macOS VM. See [AGENTS.md](AGENTS.md).
+> Development is AI-driven and validated mostly by tests in VMs: a Linux VM running a
+> lab with two headscale servers and their peers, and a macOS VM. See [AGENTS.md](AGENTS.md).
 > The first manual check on a real Mac: logging in to Tailscale's own control server via
 > its login link and to a self-hosted headscale with a preauth key, side by side, works,
 > and peers of both tailnets answer ping and serve websites by their MagicDNS names.
