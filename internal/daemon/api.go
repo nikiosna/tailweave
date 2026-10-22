@@ -13,6 +13,7 @@ import (
 
 // State is the answer of GET /api/state.
 type State struct {
+	Stopped    bool             `json:"stopped"` // `tailweave stop`: nothing on the host until start
 	AutoMap    bool             `json:"autoMap"`
 	Pool       netip.Prefix     `json:"pool"`
 	DNS        netip.Addr       `json:"dns"`
@@ -109,6 +110,12 @@ func (d *Daemon) Handler() http.Handler {
 	mux.HandleFunc("POST /api/tailnets/{name}/logout", func(w http.ResponseWriter, r *http.Request) {
 		d.tailnetChange(w, r, func() error { return d.logout(r.PathValue("name")) })
 	})
+	mux.HandleFunc("POST /api/stop", func(w http.ResponseWriter, r *http.Request) {
+		d.tailnetChange(w, r, d.stop)
+	})
+	mux.HandleFunc("POST /api/start", func(w http.ResponseWriter, r *http.Request) {
+		d.tailnetChange(w, r, d.start)
+	})
 	mux.HandleFunc("DELETE /api/tailnets/{name}", func(w http.ResponseWriter, r *http.Request) {
 		d.tailnetChange(w, r, func() error { return d.remove(r.PathValue("name")) })
 	})
@@ -155,6 +162,7 @@ func (d *Daemon) State() State {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	s := State{
+		Stopped:    d.st.Stopped,
 		AutoMap:    d.st.AutoMap,
 		Pool:       d.cfg.Pool,
 		DNS:        d.cfg.DNS,
@@ -279,6 +287,11 @@ func (d *Daemon) tailnetChange(w http.ResponseWriter, r *http.Request, f func() 
 
 // commit recomputes the plan and saves the state. Callers hold d.mu.
 func (d *Daemon) commit() error {
+	if d.st.Stopped {
+		// No tailnet runs; recomputing would drop the auto-mappings of their devices.
+		d.plan = weave.Plan{Mappings: d.st.Mappings}
+		return saveState(d.cfg.statePath(), d.st)
+	}
 	d.plan = d.compute()
 	d.st.Mappings = d.plan.Mappings
 	return saveState(d.cfg.statePath(), d.st)

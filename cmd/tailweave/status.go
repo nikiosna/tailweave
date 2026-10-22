@@ -34,6 +34,9 @@ const (
 // a mapping are only counted unless o.all is set.
 func printStatus(w io.Writer, s daemon.State, o statusOptions) {
 	p := printer{w, o.color}
+	if s.Stopped {
+		p.line(red, "tailweave is stopped; `tailweave start` switches it on again")
+	}
 	open := openConflicts(s, o.tailnet)
 	head := fmt.Sprintf("auto-mapping %s, DNS on %s, pool %s", onOff(s.AutoMap), s.DNS, s.Pool)
 	if s.Operator != nil {

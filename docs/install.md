@@ -27,7 +27,8 @@ Only IPv4 is supported, on both backends.
 No other Tailscale client or VPN may use tailweave's address ranges: `100.64.0.0/10`,
 `198.18.0.0/15` (the pool for remapped devices), `10.201.0.0/16` (transit) and
 `100.100.100.100`. tailweave checks this at startup and refuses to run if they are
-taken. If Tailscale is running, quit it (or run `tailscale down`) first.
+taken. If Tailscale is running, quit it (or run `tailscale down`) first. To go the other
+way, `tailweave stop` frees them for another VPN (see below).
 
 ## Build and install
 
@@ -48,6 +49,13 @@ running, start the service, which also starts at every boot:
 | --- | --- | --- | --- |
 | Linux | `sudo systemctl enable --now tailweave` | `journalctl -u tailweave -f` | `sudo systemctl disable --now tailweave` |
 | macOS | `sudo launchctl bootstrap system /Library/LaunchDaemons/com.github.nikiosna.tailweave.plist` | `tail -f /var/log/tailweave.log` | `sudo launchctl bootout system/com.github.nikiosna.tailweave` |
+
+To switch tailweave off for a while, for example to use the official Tailscale client or
+another VPN, `tailweave stop` is enough. You don't need to touch the service: the daemon
+keeps running but removes all its routes, its DNS service and its interface, and stays
+stopped across restarts and reboots. `tailweave start` switches it on again. If the other
+VPN is still running, start refuses with the same hint as at startup. Both need root or the
+operator.
 
 To update, `git pull`, `make` and `sudo make install` again, then restart the running
 service so it picks up the new binary: `sudo systemctl restart tailweave` on Linux,

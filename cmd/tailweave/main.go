@@ -42,6 +42,9 @@ commands:
                                      with -auth-key <key>|file:<path>|- (see login -h)
   logout <tailnet>                   log out; the tailnet stays known
   remove <tailnet>                   log out and forget the tailnet
+  stop                               switch tailweave off until start: removes its routes
+                                     and DNS, so another VPN can run; the daemon stays
+  start                              switch tailweave on again
   status [<tailnet>] [-a] [-json]    tailnets, devices and conflicts; -a also lists
                                      offline devices
   set -auto-map=<true|false>         remap colliding devices automatically or not
@@ -81,6 +84,10 @@ func main() {
 		err = logout(ctx, args)
 	case "remove":
 		err = remove(ctx, args)
+	case "stop":
+		err = stopDaemon(ctx, args)
+	case "start":
+		err = startDaemon(ctx, args)
 	case "status":
 		err = status(ctx, args)
 	case "set":
@@ -162,6 +169,31 @@ func run(ctx context.Context, args []string) error {
 		return err
 	}
 	return d.Run(ctx)
+}
+
+func stopDaemon(ctx context.Context, args []string) error {
+	fs, socket := flags("stop")
+	if err := parse(fs, args); err != nil {
+		return err
+	}
+	if _, err := client.New(*socket).Stop(ctx); err != nil {
+		return err
+	}
+	fmt.Println("tailweave stopped, also after a restart; `tailweave start` switches it on again")
+	return nil
+}
+
+func startDaemon(ctx context.Context, args []string) error {
+	fs, socket := flags("start")
+	if err := parse(fs, args); err != nil {
+		return err
+	}
+	s, err := client.New(*socket).Start(ctx)
+	if err != nil {
+		return err
+	}
+	fmt.Printf("tailweave started with %d tailnets\n", len(s.Tailnets))
+	return nil
 }
 
 func status(ctx context.Context, args []string) error {

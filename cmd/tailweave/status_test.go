@@ -98,6 +98,17 @@ func TestPrintStatus(t *testing.T) {
 	if out := status(statusOptions{color: true}); !strings.Contains(out, "\x1b[31m100.64.0.2\x1b[0m") {
 		t.Errorf("status without color:\n%q", out)
 	}
+	if strings.Contains(out, "stopped") {
+		t.Errorf("running tailweave shown as stopped:\n%s", out)
+	}
+
+	stopped := daemon.State{Stopped: true, Tailnets: []daemon.TailnetState{{Name: "a", State: "Stopped"}}}
+	var b bytes.Buffer
+	printStatus(&b, stopped, statusOptions{})
+	if out := b.String(); !strings.HasPrefix(out, "tailweave is stopped; `tailweave start` switches it on again\n") ||
+		!strings.Contains(out, "a  Stopped") {
+		t.Errorf("status of a stopped tailweave:\n%s", out)
+	}
 }
 
 func TestPickDevice(t *testing.T) {

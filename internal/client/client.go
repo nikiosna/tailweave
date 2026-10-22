@@ -85,6 +85,17 @@ func (c *Client) Logout(ctx context.Context, name string) (daemon.State, error) 
 	return c.do(ctx, http.MethodPost, "/api/tailnets/"+url.PathEscape(name)+"/logout", nil)
 }
 
+// Stop removes tailweave from the host until Start, so another VPN can run; the
+// daemon stays stopped across restarts.
+func (c *Client) Stop(ctx context.Context) (daemon.State, error) {
+	return c.do(ctx, http.MethodPost, "/api/stop", nil)
+}
+
+// Start switches a stopped tailweave on again. It fails if another VPN is in the way.
+func (c *Client) Start(ctx context.Context) (daemon.State, error) {
+	return c.do(ctx, http.MethodPost, "/api/start", nil)
+}
+
 // Remove logs a tailnet out and deletes all that tailweave keeps about it.
 func (c *Client) Remove(ctx context.Context, name string) (daemon.State, error) {
 	return c.do(ctx, http.MethodDelete, "/api/tailnets/"+url.PathEscape(name), nil)

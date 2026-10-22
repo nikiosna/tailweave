@@ -32,6 +32,8 @@
   .err { color: var(--bad); }
   .conflict { padding: 10px 14px; border-left: 3px solid var(--bad); margin-bottom: 8px; }
   .conflict.resolved { border-left-color: var(--warn); }
+  .notice { padding: 10px 14px; border-left: 3px solid var(--warn); margin-bottom: 12px; }
+  .notice[hidden] { display: none; }
   .table-wrap { overflow-x: auto; }
   table { width: 100%; border-collapse: collapse; }
   th, td { text-align: left; padding: 8px 12px; border-bottom: 1px solid var(--line); white-space: nowrap; }
@@ -58,7 +60,11 @@
     <h1>tailweave</h1>
     <span class="muted">DNS <span class="mono" id="dns"></span></span>
     <label class="toggle"><input type="checkbox" id="automap"> Remap colliding IPs and routes automatically</label>
+    <button id="power"></button>
   </header>
+  <div class="panel notice" id="stopped" hidden>
+    tailweave is stopped: no routes and no DNS on this machine, so another VPN can run. Start it to reach the tailnets again.
+  </div>
   <div id="msg"></div>
 
   <div class="tailnets" id="tailnets"></div>
@@ -101,11 +107,14 @@ function render() {
   const s = state;
   $("dns").textContent = s.dns;
   $("automap").checked = s.autoMap;
+  $("power").textContent = s.stopped ? "Start" : "Stop";
+  $("power").className = s.stopped ? "primary" : "";
+  $("stopped").hidden = !s.stopped;
 
   const ts = s.tailnets || [];
   $("tailnets").innerHTML = ts.length ? ts.map(t => `
     <div class="panel tailnet">
-      <b>${esc(t.name)}</b> <span class="chip ${t.state === "Running" ? "ok" : t.state === "NeedsLogin" ? "warn" : "bad"}">${esc(t.state)}</span>
+      <b>${esc(t.name)}</b> <span class="chip ${t.state === "Running" ? "ok" : t.state === "NeedsLogin" || t.state === "Stopped" ? "warn" : "bad"}">${esc(t.state)}</span>
       <span class="muted">${esc(t.domain || (t.state === "Running" ? "no MagicDNS" : ""))}</span><br>
       ${t.state === "Running"
         ? `<span class="muted">this machine:</span> ${esc(t.self || "–")} <span class="mono">${esc(t.ip)}</span>`
@@ -194,6 +203,7 @@ document.addEventListener("keydown", e => {
   if (e.key === "Escape" && editing) { editing = null; render(); }
 });
 $("automap").addEventListener("change", e => act("PUT", "/api/options", {autoMap: e.target.checked}));
+$("power").addEventListener("click", () => act("POST", state.stopped ? "/api/start" : "/api/stop"));
 
 async function poll() {
   try {

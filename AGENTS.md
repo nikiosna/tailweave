@@ -55,6 +55,9 @@ no personal paths. Commit locally only; pushing is done by the maintainer.
      unrouted; `tailweave map <tailnet> <route> [<block>]`. 4via6 routes are routed as
      they are over IPv6 (`transit6`), never remapped, with `a-b-c-d-via-N.<domain>`
      names (`TestSubnets`, `TestVia` on both backends)
+   - [x] `tailweave stop`/`start`: the daemon keeps serving its API but tears the host
+     setup down (instances, DNS, backend), so another VPN can run; kept in the state
+     across restarts; start runs preflight again (`TestStopStart`)
    - [ ] Remaining conflicts: exit nodes
 3. **macOS version** *(in progress)*
    - [x] Backend `tsnet` (`internal/engine`, `internal/router`, `internal/hostnet`): one
@@ -216,8 +219,9 @@ Keep this list current when finishing or starting a step.
   so the reverse lookup hits table 5180, whose route leads back through the interface
   the packet came in on (`twh<i>` of the peer's tailnet, or the TUN). Verified with
   `rp_filter=1`.
-- `tailweave run` first removes its own leftovers of a crashed run (`backend.Cleanup`), then
-  runs `internal/preflight` against the host (Linux: `ip -j route/rule/addr`,
+- `tailweave run` first removes its own leftovers of a crashed run (`backend.Cleanup`) and
+  opens the API socket; unless the state says `stopped`, it then (`Daemon.bringUp`, also
+  run by `tailweave start`) runs `internal/preflight` against the host (Linux: `ip -j route/rule/addr`,
   `/proc/*/comm`; macOS: `netstat -rn`, `ifconfig`, `ps`). Default routes and /1 halves
   of full tunnels do not count; `twh*`, `tailweave0` and the interface with the transit
   host address are tailweave's own. Teardown on macOS deletes a route only if it leads

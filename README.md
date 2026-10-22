@@ -52,7 +52,8 @@ tailnets do not reach each other, and the LAN does not reach them](docs/how-it-w
 - **Daemon with a CLI:** `tailweave login <name>` adds a tailnet (web link or
   `-auth-key <key>`), `tailweave status` shows tailnets, peers and conflicts,
   `tailweave set -auto-map=...` switches auto-mapping, `tailweave map`/`unmap` map
-  devices by hand, `logout`/`remove` leave a tailnet. `tailweave ui` starts an optional
+  devices by hand, `logout`/`remove` leave a tailnet, `stop`/`start` switch tailweave
+  off for another VPN and on again. `tailweave ui` starts an optional
   web UI showing the same.
 
 ![Every peer of the tailnets work and home is a thread that tailweave weaves into one

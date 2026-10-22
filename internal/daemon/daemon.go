@@ -46,6 +46,7 @@ type Daemon struct {
 	opMu  sync.Mutex
 	be    backend
 	insts map[string]runner
+	up    bool // the host is set up: backend, DNS and instances run
 
 	mu       sync.Mutex // guards the fields below
 	st       state
@@ -87,27 +88,11 @@ func New(cfg Config) (*Daemon, error) {
 
 // Run configures the host, starts the instances of all logged-in tailnets and keeps the
 // host in line with them until ctx is done. Everything is removed again on return,
-// except the tailscaled state, so the tailnets stay logged in.
+// except the tailscaled state, so the tailnets stay logged in. After `tailweave stop`
+// it only serves the API and leaves the host alone until `tailweave start`.
 func (d *Daemon) Run(ctx context.Context) error {
-	// Remove what a crashed run left, then make sure nothing else uses what tailweave is
-	// about to set up: another VPN client and tailweave would break each other.
+	// Remove what a crashed run left.
 	d.be.Cleanup()
-	if err := preflight.Run(d.claims()); err != nil {
-		return err
-	}
-	if err := d.be.Setup(); err != nil {
-		d.be.Teardown()
-		return err
-	}
-	defer d.be.Teardown()
-
-	if err := d.dns.Start(net.JoinHostPort(d.cfg.DNS.String(), "53")); err != nil {
-		if errors.Is(err, syscall.EADDRINUSE) {
-			return fmt.Errorf("another program already serves DNS on %s:53 (another VPN client or DNS proxy?); stop it before starting tailweave: %w", d.cfg.DNS, err)
-		}
-		return err
-	}
-	defer d.dns.Close()
 
 	ln, err := listenUnix(d.cfg.Socket)
 	if err != nil {
@@ -122,14 +107,26 @@ func (d *Daemon) Run(ctx context.Context) error {
 	defer srv.Close() // also removes the socket file
 
 	d.opMu.Lock()
-	for _, e := range d.entries() {
-		if !e.LoggedOut {
-			d.startInstance(e)
+	d.mu.Lock()
+	stopped := d.st.Stopped
+	d.mu.Unlock()
+	if !stopped {
+		if err := d.bringUp(); err != nil {
+			d.opMu.Unlock()
+			return err
 		}
 	}
 	d.opMu.Unlock()
-	defer d.stopAll()
-	slog.Info("tailweave running", "backend", d.cfg.Backend, "socket", d.cfg.Socket, "dns", d.cfg.DNS, "tailnets", len(d.insts))
+	defer func() {
+		d.opMu.Lock()
+		d.bringDown()
+		d.opMu.Unlock()
+	}()
+	if stopped {
+		slog.Info("tailweave stopped; waiting for tailweave start", "socket", d.cfg.Socket)
+	} else {
+		slog.Info("tailweave running", "backend", d.cfg.Backend, "socket", d.cfg.Socket, "dns", d.cfg.DNS, "tailnets", len(d.insts))
+	}
 
 	t := time.NewTicker(PollInterval)
 	defer t.Stop()
@@ -213,12 +210,81 @@ func (d *Daemon) stopInstance(name string) {
 	d.mu.Unlock()
 }
 
-func (d *Daemon) stopAll() {
-	d.opMu.Lock()
-	defer d.opMu.Unlock()
+// bringUp makes sure nothing else uses what tailweave is about to set up (another VPN
+// client and tailweave would break each other), configures the host, serves DNS and
+// starts the instances of all logged-in tailnets. Callers hold opMu.
+func (d *Daemon) bringUp() error {
+	if d.up {
+		return nil
+	}
+	if err := preflight.Run(d.claims()); err != nil {
+		return err
+	}
+	if err := d.be.Setup(); err != nil {
+		d.be.Teardown()
+		return err
+	}
+	if err := d.dns.Start(net.JoinHostPort(d.cfg.DNS.String(), "53")); err != nil {
+		d.be.Teardown()
+		if errors.Is(err, syscall.EADDRINUSE) {
+			return fmt.Errorf("another program already serves DNS on %s:53 (another VPN client or DNS proxy?); stop it before starting tailweave: %w", d.cfg.DNS, err)
+		}
+		return err
+	}
+	d.up = true
+	for _, e := range d.entries() {
+		if !e.LoggedOut {
+			d.startInstance(e)
+		}
+	}
+	return nil
+}
+
+// bringDown stops all instances and DNS and removes everything from the host that
+// bringUp added. Callers hold opMu.
+func (d *Daemon) bringDown() {
+	if !d.up {
+		return
+	}
 	for name := range d.insts {
 		d.stopInstance(name)
 	}
+	d.dns.Close()
+	d.be.Teardown()
+	d.up = false
+}
+
+// start switches a stopped tailweave on again and remembers that across restarts.
+func (d *Daemon) start() error {
+	d.opMu.Lock()
+	defer d.opMu.Unlock()
+	if err := d.bringUp(); err != nil {
+		return fmt.Errorf("%w: %v", errConflict, err)
+	}
+	return d.setStopped(false)
+}
+
+// stop removes tailweave from the host, so another VPN can take over, until start; the
+// daemon keeps serving its API and stays stopped across restarts.
+func (d *Daemon) stop() error {
+	d.opMu.Lock()
+	defer d.opMu.Unlock()
+	if err := d.setStopped(true); err != nil {
+		return err
+	}
+	d.bringDown()
+	slog.Info("tailweave stopped")
+	return nil
+}
+
+func (d *Daemon) setStopped(stopped bool) error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.st.Stopped == stopped {
+		return nil
+	}
+	d.st.Stopped = stopped
+	return saveState(d.cfg.statePath(), d.st)
 }
 
 func (d *Daemon) setStatus(name string, s tailnetStatus) {
@@ -231,6 +297,15 @@ func (d *Daemon) setStatus(name string, s tailnetStatus) {
 func (d *Daemon) reconcile(ctx context.Context) error {
 	d.opMu.Lock()
 	defer d.opMu.Unlock()
+	if !d.up {
+		d.mu.Lock()
+		for _, e := range d.st.Tailnets {
+			d.status[e.Name] = tailnetStatus{backend: "Stopped"}
+		}
+		d.plan = weave.Plan{Mappings: d.st.Mappings}
+		d.mu.Unlock()
+		return nil
+	}
 
 	type result struct {
 		st  tailnet.Status

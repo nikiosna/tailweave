@@ -209,6 +209,52 @@ func TestLifecycle(t *testing.T) {
 	assertHostClean(t)
 }
 
+// TestStopStart switches tailweave off and on without stopping the daemon: stopped, it
+// leaves the host to another VPN (and stays stopped across restarts), and start refuses
+// while that VPN runs.
+func TestStopStart(t *testing.T) {
+	labtest.RequireLab(t)
+	dir := t.TempDir()
+	tw := startTailweave(t, dir)
+	tw.login(t, labtest.TailnetA)
+	waitState(t, tw, func(s daemon.State) bool { return device(s, "a", "peer-a1") != nil })
+
+	tw.cli(t, "stop")
+	if s := must(t)(tw.State(t.Context())); !s.Stopped || s.Tailnets[0].State != "Stopped" || len(s.Devices) != 0 {
+		t.Errorf("state after stop: %+v", s)
+	}
+	assertHostClean(t)
+	if out, err := exec.Command("sudo", "-n", tw.bin, "login", "a", "-socket", tw.Socket).CombinedOutput(); err == nil ||
+		!strings.Contains(string(out), "tailweave start") {
+		t.Errorf("login while stopped: %v\n%s", err, out)
+	}
+
+	// Stopped across restarts, without touching the host.
+	tw.stop(t)
+	tw = startTailweave(t, dir)
+	if s := must(t)(tw.State(t.Context())); !s.Stopped {
+		t.Errorf("state after restart: %+v", s)
+	}
+	assertHostClean(t)
+
+	ts := labtest.StartHostTailscale(t, labtest.TailnetB)
+	out, err := exec.Command("sudo", "-n", tw.bin, "start", "-socket", tw.Socket).CombinedOutput()
+	if err == nil || !strings.Contains(string(out), "Tailscale is running") {
+		t.Errorf("start next to Tailscale: %v\n%s", err, out)
+	}
+	if s := must(t)(tw.State(t.Context())); !s.Stopped {
+		t.Errorf("state after a failed start: %+v", s)
+	}
+	ts.Stop(t)
+
+	tw.cli(t, "start")
+	waitState(t, tw, func(s daemon.State) bool { return !s.Stopped && device(s, "a", "peer-a1") != nil })
+	flushDNS(t)
+	if got := waitCurl(t, "peer-a1.a.lab", "peer-a1"); got != "peer-a1" {
+		t.Errorf("curl peer-a1 after start = %q", got)
+	}
+}
+
 // TestLoginSSO logs in via the web link: `tailweave login` prints headscale's URL, a
 // headless browser signs in at the lab's Dex and confirms, and the login completes.
 func TestLoginSSO(t *testing.T) {

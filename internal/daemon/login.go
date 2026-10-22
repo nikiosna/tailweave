@@ -29,6 +29,9 @@ func (d *Daemon) login(req LoginRequest) error {
 	}
 	d.opMu.Lock()
 	defer d.opMu.Unlock()
+	if !d.up {
+		return fmt.Errorf("%w: tailweave is stopped; run `tailweave start` first", errConflict)
+	}
 
 	if inst := d.insts[req.Name]; inst != nil {
 		if st, err := inst.Status(context.Background()); err == nil && st.Running() {

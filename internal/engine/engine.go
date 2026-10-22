@@ -82,6 +82,7 @@ func (b *Backend) Setup() error {
 func (b *Backend) Teardown() {
 	if b.net != nil {
 		b.net.Teardown()
+		b.net = nil
 	}
 	if b.dev != nil {
 		b.dev.Close()
@@ -89,6 +90,7 @@ func (b *Backend) Teardown() {
 			if err := <-b.done; err != nil {
 				slog.Warn("router", "err", err)
 			}
+			b.done = nil
 		}
 		b.dev = nil
 	}

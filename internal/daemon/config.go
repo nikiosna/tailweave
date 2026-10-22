@@ -99,6 +99,7 @@ type state struct {
 	Tailnets []tailnetEntry  `json:"tailnets"` // in priority order: the first keeps colliding IPs
 	Mappings []weave.Mapping `json:"mappings"`
 	Operator *Operator       `json:"operator,omitempty"`
+	Stopped  bool            `json:"stopped,omitempty"` // `tailweave stop`; kept across restarts
 }
 
 // tailnetEntry is a tailnet added with `tailweave login`.

@@ -87,6 +87,16 @@ with sync_playwright() as p:
         row.get_by_role("button", name="Unmap").click()
         expect(row).to_contain_text("auto-mapped")
 
+    page.get_by_role("button", name="Stop", exact=True).click()
+    expect(page.locator("#stopped")).to_be_visible()
+    expect(page.locator("#devices tr")).to_have_count(0)
+    page.screenshot(path=f"{out}/6-stopped.png", full_page=True)
+    check("name while stopped", resolve(name), None)
+    page.get_by_role("button", name="Start", exact=True).click()
+    expect(page.locator("#stopped")).to_be_hidden()
+    expect(page.locator("#devices tr", has_text=name)).to_contain_text("auto-mapped", timeout=30000)
+    check("name after start", resolve(name), b1["routedIP"])
+
     mobile = browser.new_page(viewport={"width": 390, "height": 844})
     mobile.goto(UI)
     mobile.wait_for_selector("#devices tr")
