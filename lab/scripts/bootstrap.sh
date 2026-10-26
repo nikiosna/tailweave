@@ -57,6 +57,9 @@ for p in peer-a1 peer-b1 peer-a2 peer-b2 router-a router-b exit-a exit-b peer-b3
 		sh -c "docker exec $p tailscale status --json | jq -e '.BackendState == \"Running\"'"
 done
 
+# The exit nodes' internet; it needs no tailnet.
+[[ $enabled == *" inet "* ]] && compose up -d --no-deps inet
+
 # Approve every advertised route so subnet routers and exit nodes are active.
 for net in "${TAILNETS[@]}"; do
 	hs "$net" nodes list -o json | jq -r '(. // [])[] | select((.available_routes // []) | length > 0)

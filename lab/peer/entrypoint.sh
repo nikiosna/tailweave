@@ -11,6 +11,11 @@ for a in $(echo "${LAB_EXTRA_ADDRS:-}" | tr ',' ' '); do
 	ip addr add "$a" dev lo
 done
 
+# Routes as <prefix>=<gateway>, e.g. to networks the exit nodes reach through another hop.
+for r in $(echo "${LAB_EXTRA_ROUTES:-}" | tr ',' ' '); do
+	ip route add "${r%%=*}" via "${r#*=}"
+done
+
 httpd -p 80 -h /srv/www
 socat -T5 UDP-LISTEN:7,fork,reuseaddr EXEC:'/bin/cat' &
 socat -T5 UDP-LISTEN:8,fork,reuseaddr SYSTEM:"echo $name" &

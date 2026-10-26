@@ -5,7 +5,8 @@
 # Profiles add conflict scenarios:
 #   subnets     overlapping subnet routes (A and B both route 10.99.0.0/24),
 #               and a route equal to the Lima VM LAN, user-v2 (192.168.104.0/24)
-#   exit-nodes  one exit node in each tailnet
+#   exit-nodes  one exit node in each tailnet, both on the "internet" network wan, behind
+#               which inet (198.51.100.10) answers HTTP with the address it was reached from
 
 name: tailweave-lab
 
@@ -120,9 +121,12 @@ services:
     environment:
       <<: *peer-a-env
       TS_HOSTNAME: exit-a
+      LAB_EXTRA_ROUTES: 198.51.100.0/24=203.0.113.10
       TS_EXTRA_ARGS: --login-server=http://172.30.0.10:8080 --advertise-exit-node
     volumes: [exit-a:/var/lib/tailscale]
-    networks: [lab]
+    networks:
+      lab: { gw_priority: 1 }
+      wan: { ipv4_address: 203.0.113.2 }
 
   # --- tailnet B -----------------------------------------------------------
   peer-b1:
@@ -168,9 +172,34 @@ services:
     environment:
       <<: *peer-b-env
       TS_HOSTNAME: exit-b
+      LAB_EXTRA_ROUTES: 198.51.100.0/24=203.0.113.10
       TS_EXTRA_ARGS: --login-server=http://172.30.0.11:8080 --advertise-exit-node
     volumes: [exit-b:/var/lib/tailscale]
-    networks: [lab]
+    networks:
+      lab: { gw_priority: 1 }
+      wan: { ipv4_address: 203.0.113.3 }
+
+  # The internet as seen through an exit node: inet answers HTTP on 198.51.100.10 with the
+  # address a request came from, the exit node's address on wan, as exit nodes masquerade.
+  # The address sits behind inet's wan address, one hop away from the exit nodes: an exit
+  # node does not let its clients into networks it is attached to.
+  inet:
+    image: tailweave-lab-peer:${TAILSCALE_VERSION:-1.102.5}
+    profiles: [exit-nodes]
+    container_name: inet
+    hostname: inet
+    restart: unless-stopped
+    cap_add: [NET_ADMIN]
+    # socat mangles quotes, so no printf; curl takes the bare line ends.
+    entrypoint:
+      - sh
+      - -c
+      - >-
+        ip addr add 198.51.100.10/32 dev lo &&
+        exec socat TCP-LISTEN:80,fork,reuseaddr
+        'SYSTEM:echo HTTP/1.0 200 OK; echo; echo $$SOCAT_PEERADDR'
+    networks:
+      wan: { ipv4_address: 203.0.113.10 }
 
 networks:
   lab:
@@ -183,6 +212,17 @@ networks:
       config:
         - subnet: 172.30.0.0/24
           ip_range: 172.30.0.128/25
+
+  # Only the exit nodes and inet are on it. Without an address on the bridge, the VM has
+  # no route there: 198.51.100.10 is reachable only through an exit node.
+  wan:
+    driver_opts:
+      com.docker.network.bridge.name: twwan0
+      com.docker.network.bridge.inhibit_ipv4: "true"
+    ipam:
+      config:
+        - subnet: 203.0.113.0/24
+          ip_range: 203.0.113.128/25
 
 volumes:
   headscale-a:
