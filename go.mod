@@ -7,6 +7,7 @@ require (
 	github.com/tailscale/wireguard-go v0.0.0-20260715223240-2e01ba5b00f0
 	golang.org/x/net v0.57.0
 	golang.org/x/sys v0.47.0
+	golang.org/x/term v0.45.0
 	tailscale.com v1.102.5
 )
 
@@ -45,7 +46,6 @@ require (
 	golang.org/x/exp v0.0.0-20260410095643-746e56fc9e2f // indirect
 	golang.org/x/oauth2 v0.36.0 // indirect
 	golang.org/x/sync v0.22.0 // indirect
-	golang.org/x/term v0.45.0 // indirect
 	golang.org/x/text v0.40.0 // indirect
 	golang.org/x/time v0.15.0 // indirect
 	golang.zx2c4.com/wintun v0.0.0-20230126152724-0fa3db229ce2 // indirect
