@@ -101,6 +101,29 @@ func TestIsolation(t *testing.T) {
 		}
 	})
 
+	// The exit node is the host's alone: neither the LAN nor a peer of another tailnet, nor
+	// one of its own, gets to the internet through it.
+	t.Run("exit node", func(t *testing.T) {
+		if s := labtest.Scenario(); s != "exit-nodes" && s != "all" {
+			t.Skip("needs the exit-nodes scenario")
+		}
+		tw.cli(t, "set", "-exit-node=a/exit-a")
+		t.Cleanup(func() { tw.cli(t, "set", "-exit-node=") })
+		if got := waitCurl(t, internet, "203.0.113.2"); got != "203.0.113.2" {
+			t.Fatalf("host does not reach %s through exit-a: %q", internet, got)
+		}
+		lan := lanClient(t)
+		if out, err := labtest.Output("sudo", "-n", "ip", "netns", "exec", lan, "curl", "-s", "-m3", "http://"+internet+"/"); err == nil {
+			t.Errorf("LAN client reaches %s: %q", internet, out)
+		}
+		for _, peer := range []string{"peer-a1", "peer-b1"} {
+			peerRoute(t, peer, netip.MustParseAddr(internet))
+			if got := peerWget(t, peer, netip.MustParseAddr(internet), 80); got != "" {
+				t.Errorf("%s reaches %s via this machine: %q", peer, internet, got)
+			}
+		}
+	})
+
 	t.Run("namespaces", func(t *testing.T) {
 		if os.Getenv("TAILWEAVE_BACKEND") == "tsnet" {
 			t.Skip("the tsnet backend has no namespaces")

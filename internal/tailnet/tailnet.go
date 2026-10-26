@@ -5,9 +5,11 @@
 package tailnet
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/netip"
@@ -44,6 +46,8 @@ type node struct {
 	Online       bool
 	// PrimaryRoutes are the subnet routes the node is the active router for.
 	PrimaryRoutes []netip.Prefix
+	// ExitNodeOption is set if the node offers itself as exit node (advertised and approved).
+	ExitNodeOption bool
 }
 
 type status struct {
@@ -89,6 +93,33 @@ func (c *Client) Status(ctx context.Context, name string) (Status, error) {
 	return convert(name, st), nil
 }
 
+// SetExitNode makes tailscaled send internet traffic to the peer with the stable ID
+// peerID; "" turns that off.
+func (c *Client) SetExitNode(ctx context.Context, peerID string) error {
+	// A subset of ipn.MaskedPrefs; an exit node picked by IP is cleared as well.
+	body, err := json.Marshal(map[string]any{"ExitNodeIDSet": true, "ExitNodeID": peerID,
+		"ExitNodeIPSet": true, "ExitNodeIP": ""})
+	if err != nil {
+		return err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPatch,
+		"http://local-tailscaled.sock/localapi/v0/prefs", bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		msg, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+		return fmt.Errorf("localapi prefs: %s: %s", resp.Status, strings.TrimSpace(string(msg)))
+	}
+	return nil
+}
+
 func convert(name string, st status) Status {
 	s := Status{Backend: st.BackendState, AuthURL: st.AuthURL}
 	if !s.Running() {
@@ -125,7 +156,8 @@ func peerAPIPort(n *node, ip netip.Addr) uint16 {
 }
 
 func peer(n *node) weave.Peer {
-	p := weave.Peer{ID: n.ID, Name: machineName(n), DNSName: n.DNSName, IPs: n.TailscaleIPs, Online: n.Online}
+	p := weave.Peer{ID: n.ID, Name: machineName(n), DNSName: n.DNSName, IPs: n.TailscaleIPs, Online: n.Online,
+		Exit: n.ExitNodeOption}
 	for _, r := range n.PrimaryRoutes {
 		if weave.Routable(r) {
 			p.Routes = append(p.Routes, r)

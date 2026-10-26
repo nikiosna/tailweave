@@ -29,6 +29,22 @@ const (
 	nftTable = "tailweave"
 )
 
+// ExitTable holds the default route into the tailnet of the exit node in use. While one is
+// picked, three more rules (ExitRules) come after RulePref: Tailscale's own sockets, which
+// carry BypassMark, and the networks of the main table stay as they are, everything else
+// from this machine goes to ExitTable.
+const (
+	ExitTable  = 5181
+	BypassMark = "0x80000/0xff0000"
+)
+
+// ExitRules are the arguments of the ip rules for an exit node, in order.
+var ExitRules = [][]string{
+	{"pref", fmt.Sprint(RulePref + 1), "fwmark", BypassMark, "lookup", "main"},
+	{"pref", fmt.Sprint(RulePref + 2), "iif", "lo", "lookup", "main", "suppress_prefixlength", "0"},
+	{"pref", fmt.Sprint(RulePref + 3), "iif", "lo", "lookup", fmt.Sprint(ExitTable)},
+}
+
 // VethPrefix starts the host side names of the namespaces' veth pairs ("twh0", ...).
 const VethPrefix = "twh"
 
@@ -110,6 +126,25 @@ func HostRoutes6(p weave.Plan, nss []Namespace, blocked []netip.Prefix) string {
 	return b.String()
 }
 
+// ExitRoutes renders `ip -batch` and `ip -6 -batch` input that replaces the contents of
+// ExitTable: a default route into the namespace of the exit node's tailnet, or none, which
+// blocks the traffic while the tailnet is not running. IPv6 is always blocked; exit nodes
+// carry IPv4 only so far.
+func ExitRoutes(p weave.Plan, nss []Namespace) (v4, v6 string) {
+	v4 = fmt.Sprintf("route flush table %d\n", ExitTable)
+	v6 = v4 + fmt.Sprintf("route replace unreachable default table %d\n", ExitTable)
+	i := -1
+	if p.Exit != nil {
+		i = slices.IndexFunc(nss, func(ns Namespace) bool { return ns.Tailnet == p.Exit.Tailnet })
+	}
+	if i >= 0 {
+		v4 += fmt.Sprintf("route replace default via %s table %d\n", nss[i].Gateway, ExitTable)
+	} else {
+		v4 += fmt.Sprintf("route replace unreachable default table %d\n", ExitTable)
+	}
+	return v4, v6
+}
+
 // NamespaceRules renders an `nft -f` script that atomically replaces tailweave's table in
 // the namespace of ns.
 //
@@ -158,6 +193,9 @@ func NamespaceRules(p weave.Plan, ns Namespace) string {
 			ns.Tun, ns.Veth, joinIPs(routed), ns.HostIP)
 	}
 	fmt.Fprintf(&b, "\t\tiifname %q drop\n", ns.Tun)
+	// What the host sends goes into the tailnet, never back out: with tailscaled down, the
+	// host's internet traffic for an exit node would otherwise return and leave directly.
+	fmt.Fprintf(&b, "\t\tiifname %q oifname %q drop\n", ns.Veth, ns.Veth)
 	b.WriteString("\t}\n")
 	// Before tailscaled's own rules (at srcnat), which would masquerade what it forwards.
 	b.WriteString("\tchain postrouting {\n\t\ttype nat hook postrouting priority srcnat - 1; policy accept;\n")

@@ -46,7 +46,8 @@ type Daemon struct {
 	opMu  sync.Mutex
 	be    backend
 	insts map[string]runner
-	up    bool // the host is set up: backend, DNS and instances run
+	up    bool              // the host is set up: backend, DNS and instances run
+	exits map[string]string // exit node peer ID each instance was set to ("": none)
 
 	mu       sync.Mutex // guards the fields below
 	st       state
@@ -80,6 +81,7 @@ func New(cfg Config) (*Daemon, error) {
 		cfg:      cfg,
 		be:       be,
 		insts:    map[string]runner{},
+		exits:    map[string]string{},
 		st:       st,
 		tailnets: map[string]weave.Tailnet{},
 		status:   map[string]tailnetStatus{},
@@ -150,7 +152,14 @@ func (d *Daemon) claims() preflight.Claims {
 		OwnInterfaces: []string{netcfg.VethPrefix, netcfg.DNSLink},
 	}
 	if runtime.GOOS == "linux" {
-		c.RulePref, c.Table = netcfg.RulePref, strconv.Itoa(netcfg.Table)
+		table, exit := strconv.Itoa(netcfg.Table), strconv.Itoa(netcfg.ExitTable)
+		c.Rules = []preflight.Rule{
+			{Pref: netcfg.RulePref, Iif: "lo", Table: table},
+			{Pref: netcfg.RulePref + 1, Table: "main"},
+			{Pref: netcfg.RulePref + 2, Iif: "lo", Table: "main"},
+			{Pref: netcfg.RulePref + 3, Iif: "lo", Table: exit},
+		}
+		c.Tables = []string{table, exit}
 	}
 	if host, _, err := instance.Addrs(d.cfg.Transit, 0); err == nil {
 		c.OwnAddr = host
@@ -204,6 +213,7 @@ func (d *Daemon) stopInstance(name string) {
 		inst.Stop()
 	}
 	delete(d.insts, name)
+	delete(d.exits, name)
 	d.mu.Lock()
 	delete(d.tailnets, name)
 	delete(d.status, name)
@@ -355,7 +365,32 @@ func (d *Daemon) reconcile(ctx context.Context) error {
 	d.mu.Unlock()
 
 	d.dns.Update(plan.Names, plan.Domains, plan.Via)
-	return d.be.Apply(plan)
+	if err := d.be.Apply(plan); err != nil {
+		return err
+	}
+	for name, inst := range d.insts {
+		if r := results[name]; r.err == nil && r.st.Running() {
+			d.setExit(ctx, name, inst, plan.Exit)
+		}
+	}
+	return nil
+}
+
+// setExit tells a running instance which exit node to use, if that changed. Callers hold
+// opMu.
+func (d *Daemon) setExit(ctx context.Context, name string, inst runner, exit *weave.Exit) {
+	want := ""
+	if exit != nil && exit.Tailnet == name {
+		want = exit.PeerID
+	}
+	if have, ok := d.exits[name]; ok && have == want {
+		return
+	}
+	if err := inst.SetExitNode(ctx, want); err != nil {
+		slog.Warn("set exit node", "tailnet", name, "err", err)
+		return
+	}
+	d.exits[name] = want
 }
 
 // compute recomputes the plan from the current state. Callers hold d.mu.
@@ -366,7 +401,7 @@ func (d *Daemon) compute() weave.Plan {
 			tns = append(tns, tn)
 		}
 	}
-	opt := weave.Options{AutoMap: d.st.AutoMap, Pool: d.cfg.Pool}
+	opt := weave.Options{AutoMap: d.st.AutoMap, Pool: d.cfg.Pool, ExitNode: d.st.ExitNode}
 	if slices.ContainsFunc(tns, hasRoutes) {
 		opt.Exclude = append([]netip.Prefix{netcfg.CGNAT, d.cfg.Transit, netip.PrefixFrom(d.cfg.DNS, 32)},
 			d.hostNetworks()...)

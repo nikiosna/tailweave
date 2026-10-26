@@ -13,9 +13,14 @@ var claims = Claims{
 		netip.MustParsePrefix("198.18.0.0/15"),
 		netip.MustParsePrefix("10.201.0.0/16"),
 	},
-	DNS:           netip.MustParseAddr("100.100.100.100"),
-	RulePref:      5180,
-	Table:         "5180",
+	DNS: netip.MustParseAddr("100.100.100.100"),
+	Rules: []Rule{
+		{Pref: 5180, Iif: "lo", Table: "5180"},
+		{Pref: 5181, Table: "main"},
+		{Pref: 5182, Iif: "lo", Table: "main"},
+		{Pref: 5183, Iif: "lo", Table: "5181"},
+	},
+	Tables:        []string{"5180", "5181"},
 	OwnInterfaces: []string{"twh", "tailweave0"},
 	OwnAddr:       netip.MustParseAddr("10.201.0.1"),
 }
@@ -138,6 +143,20 @@ func TestCheck(t *testing.T) {
 			want: []string{"ip rule priority 5180 is already used"},
 		},
 		{
+			name: "foreign rule at an exit node priority",
+			s: with(lan, func(s *Snapshot) {
+				s.Rules = append(s.Rules, Rule{Pref: 5182, Table: "main"})
+			}),
+			want: []string{"ip rule priority 5182 is already used"},
+		},
+		{
+			name: "foreign use of the exit table",
+			s: with(lan, func(s *Snapshot) {
+				s.Rules = append(s.Rules, Rule{Pref: 9000, Table: "5181"})
+			}),
+			want: []string{"routing table 5181 is already used"},
+		},
+		{
 			name: "foreign use of our table",
 			s: with(lan, func(s *Snapshot) {
 				s.Rules = append(s.Rules, Rule{Pref: 9000, Table: "5180"})
@@ -147,7 +166,9 @@ func TestCheck(t *testing.T) {
 		{
 			name: "own leftovers",
 			s: with(lan, func(s *Snapshot) {
-				s.Rules = append(s.Rules, Rule{Pref: 5180, Iif: "lo", Table: "5180"})
+				s.Rules = append(s.Rules, Rule{Pref: 5180, Iif: "lo", Table: "5180"},
+					Rule{Pref: 5181, Table: "main"}, Rule{Pref: 5182, Iif: "lo", Table: "main"},
+					Rule{Pref: 5183, Iif: "lo", Table: "5181"})
 				s.Routes = append(s.Routes,
 					Route{Prefix: pfx("100.64.0.0/10"), Table: "5180", Type: "unreachable"},
 					Route{Prefix: pfx("100.64.0.1/32"), Dev: "twh0", Table: "5180", Type: "unicast"},
@@ -299,5 +320,29 @@ func TestHostNetworks(t *testing.T) {
 	want := []netip.Prefix{pfx("127.0.0.0/8"), pfx("192.168.1.0/24"), pfx("172.17.0.0/16"), pfx("10.8.0.0/16")}
 	if got := HostNetworks(s, claims); !slices.Equal(got, want) {
 		t.Errorf("HostNetworks = %v, want %v", got, want)
+	}
+}
+
+func TestCheckExit(t *testing.T) {
+	halves := func(dev string) func(*Snapshot) {
+		return func(s *Snapshot) {
+			s.Routes = append(s.Routes,
+				Route{Prefix: pfx("0.0.0.0/1"), Dev: dev, Table: "main", Type: "unicast"},
+				Route{Prefix: pfx("128.0.0.0/1"), Dev: dev, Table: "main", Type: "unicast"})
+			s.Interfaces = append(s.Interfaces, Interface{Name: dev, Addrs: []netip.Prefix{pfx("10.201.0.1/32")}})
+		}
+	}
+	if err := CheckExit(lan, claims); err != nil {
+		t.Errorf("plain default route: %v", err)
+	}
+	// tailweave's own utun, recognized by the transit address.
+	if err := CheckExit(with(lan, halves("utun7")), claims); err != nil {
+		t.Errorf("own halves: %v", err)
+	}
+	wg := with(lan, func(s *Snapshot) {
+		s.Routes = append(s.Routes, Route{Prefix: pfx("0.0.0.0/1"), Dev: "wg0", Table: "main", Type: "unicast"})
+	})
+	if err := CheckExit(wg, claims); err == nil || !strings.Contains(err.Error(), "through wg0") {
+		t.Errorf("WireGuard full tunnel: %v", err)
 	}
 }

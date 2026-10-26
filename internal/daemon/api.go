@@ -8,6 +8,7 @@ import (
 	"net/netip"
 	"slices"
 
+	"github.com/Nikiosna/tailweave/internal/preflight"
 	"github.com/Nikiosna/tailweave/internal/weave"
 )
 
@@ -22,6 +23,7 @@ type State struct {
 	Devices    []weave.Device   `json:"devices"`
 	Conflicts  []weave.Conflict `json:"conflicts"`
 	Mappings   []weave.Mapping  `json:"mappings"`
+	ExitNode   *weave.Exit      `json:"exitNode,omitempty"` // the exit node in use
 	Operator   *Operator        `json:"operator,omitempty"`
 }
 
@@ -53,6 +55,9 @@ type Options struct {
 	AutoMap *bool `json:"autoMap,omitempty"`
 	// Operator replaces the operator; one without a name removes it. Only root may set it.
 	Operator *Operator `json:"operator,omitempty"`
+	// ExitNode picks the exit node by tailnet and peer ID; one without a tailnet turns the
+	// exit node off.
+	ExitNode *weave.DeviceRef `json:"exitNode,omitempty"`
 }
 
 // Handler serves the JSON API used by the CLI and by `tailweave ui`. Everyone may read,
@@ -72,6 +77,11 @@ func (d *Daemon) Handler() http.Handler {
 			return
 		}
 		d.change(w, r, func() error {
+			if o.ExitNode != nil {
+				if err := d.setExitNode(*o.ExitNode); err != nil {
+					return err
+				}
+			}
 			if o.AutoMap != nil {
 				d.st.AutoMap = *o.AutoMap
 			}
@@ -170,7 +180,11 @@ func (d *Daemon) State() State {
 		Devices:    d.plan.Devices,
 		Conflicts:  d.plan.Conflicts,
 		Mappings:   d.st.Mappings,
+		ExitNode:   d.plan.Exit,
 		Operator:   d.st.Operator,
+	}
+	if s.ExitNode == nil && d.st.ExitNode != nil { // stopped: nothing is computed
+		s.ExitNode = &weave.Exit{Tailnet: d.st.ExitNode.Tailnet, PeerID: d.st.ExitNode.PeerID, Name: d.st.ExitNode.Name}
 	}
 	for _, e := range d.st.Tailnets {
 		tn, st := d.tailnets[e.Name], d.status[e.Name]
@@ -211,6 +225,32 @@ func (d *Daemon) setMapping(req MappingRequest) error {
 	d.st.Mappings = append(slices.DeleteFunc(d.st.Mappings, func(m weave.Mapping) bool {
 		return m.Tailnet == req.Tailnet && m.PeerID == req.PeerID
 	}), weave.Mapping{Tailnet: req.Tailnet, PeerID: req.PeerID, IP: req.IP})
+	return nil
+}
+
+// setExitNode picks the exit node, or turns it off for a ref without tailnet. Callers
+// hold d.mu.
+func (d *Daemon) setExitNode(ref weave.DeviceRef) error {
+	if ref.Tailnet == "" {
+		d.st.ExitNode = nil
+		return nil
+	}
+	i := slices.IndexFunc(d.plan.Devices, func(x weave.Device) bool {
+		return x.Tailnet == ref.Tailnet && x.PeerID == ref.PeerID
+	})
+	if i < 0 {
+		return errNotFound
+	}
+	dev := d.plan.Devices[i]
+	if !dev.ExitNode {
+		return fmt.Errorf("%s (%s) does not offer itself as exit node", dev.Name, dev.Tailnet)
+	}
+	if s, err := preflight.Collect(); err == nil {
+		if err := preflight.CheckExit(s, d.claims()); err != nil {
+			return fmt.Errorf("%w: %v", errConflict, err)
+		}
+	}
+	d.st.ExitNode = &weave.DeviceRef{Tailnet: dev.Tailnet, PeerID: dev.PeerID, Name: dev.Name}
 	return nil
 }
 

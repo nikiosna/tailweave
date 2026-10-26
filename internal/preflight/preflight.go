@@ -19,8 +19,8 @@ import (
 type Claims struct {
 	Ranges        []netip.Prefix // routed or assigned by tailweave: CGNAT, pool, transit
 	DNS           netip.Addr     // address of the DNS service
-	RulePref      int            // priority of tailweave's ip rule (Linux)
-	Table         string         // tailweave's routing table (Linux)
+	Rules         []Rule         // tailweave's ip rules (Linux); no other rule may use their priorities
+	Tables        []string       // tailweave's routing tables (Linux)
 	OwnInterfaces []string       // name prefixes of tailweave's own interfaces
 	OwnAddr       netip.Addr     // interfaces carrying this address are tailweave's
 }
@@ -103,7 +103,7 @@ func Check(s Snapshot, c Claims) error {
 		case "throw", "local", "broadcast":
 			continue
 		}
-		if r.Prefix.Bits() <= 1 || isOwn(r.Dev) || (c.Table != "" && r.Table == c.Table) {
+		if r.Prefix.Bits() <= 1 || isOwn(r.Dev) || slices.Contains(c.Tables, r.Table) {
 			continue
 		}
 		cl, ok := overlapping(r.Prefix.Masked())
@@ -125,13 +125,12 @@ func Check(s Snapshot, c Claims) error {
 		}
 	}
 	for _, r := range s.Rules {
-		mine := r.Pref == c.RulePref && r.Iif == "lo" && r.Table == c.Table
 		switch {
-		case mine || c.RulePref == 0:
-		case r.Pref == c.RulePref:
-			add("pref", "ip rule priority %d is already used (lookup %s)", r.Pref, r.Table)
-		case r.Table == c.Table:
-			add("table", "routing table %s is already used by the ip rule at priority %d", r.Table, r.Pref)
+		case slices.Contains(c.Rules, r):
+		case slices.ContainsFunc(c.Rules, func(m Rule) bool { return m.Pref == r.Pref }):
+			add(fmt.Sprint("pref ", r.Pref), "ip rule priority %d is already used (lookup %s)", r.Pref, r.Table)
+		case slices.Contains(c.Tables, r.Table):
+			add("table "+r.Table, "routing table %s is already used by the ip rule at priority %d", r.Table, r.Pref)
 		}
 	}
 	if len(conflicts) == 0 {
@@ -151,6 +150,31 @@ func Check(s Snapshot, c Claims) error {
 		b.WriteString(". Stop the other VPN client or proxy before starting tailweave")
 	}
 	return fmt.Errorf("%s", b.String())
+}
+
+// CheckExit returns an error if another program sends all traffic into a tunnel with the
+// two halves of the address space (0.0.0.0/1, 128.0.0.0/1), as VPN clients do on macOS:
+// tailweave needs the same routes for an exit node. Plain default routes do not count;
+// tailweave's routes win over them.
+func CheckExit(s Snapshot, c Claims) error {
+	isOwn := c.own(s)
+	for _, r := range s.Routes {
+		if r.Prefix.Bits() == 1 && (r.Table == "" || r.Table == "main") && r.Type != "throw" && !isOwn(r.Dev) {
+			msg := fmt.Sprintf("another program sends all traffic through %s (route %s)", or(r.Dev, r.Type), r.Prefix)
+			if tailscale(s) {
+				return fmt.Errorf("%s; Tailscale is running, turn off its exit node first", msg)
+			}
+			return fmt.Errorf("%s; turn off the other VPN before using an exit node", msg)
+		}
+	}
+	return nil
+}
+
+func or(s, def string) string {
+	if s == "" {
+		return def
+	}
+	return s
 }
 
 // own returns whether an interface of the snapshot belongs to tailweave.

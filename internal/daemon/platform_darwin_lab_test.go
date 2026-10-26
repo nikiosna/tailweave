@@ -50,6 +50,21 @@ func assertHostClean(t *testing.T) {
 	if out := labtest.Run(t, "netstat", "-rn", "-f", "inet6"); strings.Contains(out, "fd7a:115c:a1e0:b1a::/64") {
 		t.Errorf("IPv6 routes left:\n%s", out)
 	}
+	if exitRouted(t) {
+		t.Error("exit node routes left")
+	}
+}
+
+// exitRouted reports whether tailweave sends this machine's internet traffic to an exit
+// node: through the halves of the address space, 0/1 and 128.0/1 in netstat's notation.
+func exitRouted(t *testing.T) bool {
+	t.Helper()
+	for _, l := range strings.Split(labtest.Run(t, "netstat", "-rn", "-f", "inet"), "\n") {
+		if f := strings.Fields(l); len(f) > 0 && (f[0] == "0/1" || f[0] == "128.0/1") {
+			return true
+		}
+	}
+	return false
 }
 
 // tailscaleRules has nothing to return: macOS has no policy routing rules.

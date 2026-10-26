@@ -45,13 +45,25 @@ func assertHostClean(t *testing.T) {
 		t.Errorf("DOCKER-USER rules left:\n%s", out)
 	}
 	for _, family := range []string{"-4", "-6"} {
-		if out := labtest.Run(t, "ip", family, "rule"); strings.Contains(out, "5180") {
-			t.Errorf("ip %s rule left:\n%s", family, out)
+		out := labtest.Run(t, "ip", family, "rule")
+		for _, pref := range []string{"5180:", "5181:", "5182:", "5183:"} {
+			if strings.Contains(out, pref) {
+				t.Errorf("ip %s rule left:\n%s", family, out)
+			}
 		}
-		if out := labtest.Run(t, "ip", family, "route", "show", "table", "5180"); out != "" {
-			t.Errorf("ip %s routes left in table 5180:\n%s", family, out)
+		for _, table := range []string{"5180", "5181"} {
+			if out := labtest.Run(t, "ip", family, "route", "show", "table", table); out != "" {
+				t.Errorf("ip %s routes left in table %s:\n%s", family, table, out)
+			}
 		}
 	}
+}
+
+// exitRouted reports whether tailweave sends this machine's internet traffic to an exit
+// node.
+func exitRouted(t *testing.T) bool {
+	t.Helper()
+	return strings.Contains(labtest.Run(t, "ip", "rule"), "lookup 5181")
 }
 
 // tailscaleRules returns tailscaled's ip rules (priorities 5210-5270).

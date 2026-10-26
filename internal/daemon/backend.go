@@ -44,6 +44,9 @@ type backend interface {
 type runner interface {
 	Status(ctx context.Context) (tailnet.Status, error)
 	Up(tailnet.Login) error
+	// SetExitNode makes the instance send internet traffic to the peer with this ID; ""
+	// turns that off.
+	SetExitNode(ctx context.Context, peerID string) error
 	LoginError() string
 	Logout() error
 	Stop()
@@ -129,6 +132,10 @@ type netnsRunner struct {
 
 func (r *netnsRunner) Status(ctx context.Context) (tailnet.Status, error) {
 	return r.client.Status(ctx, r.Name)
+}
+
+func (r *netnsRunner) SetExitNode(ctx context.Context, peerID string) error {
+	return r.client.SetExitNode(ctx, peerID)
 }
 
 func (r *netnsRunner) Stop() {

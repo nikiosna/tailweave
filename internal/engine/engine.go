@@ -26,6 +26,7 @@ import (
 	"tailscale.com/envknob"
 	"tailscale.com/ipn"
 	"tailscale.com/logtail"
+	"tailscale.com/tailcfg"
 	"tailscale.com/tsnet"
 )
 
@@ -69,7 +70,7 @@ func (b *Backend) Setup() error {
 	if err := b.net.Setup(); err != nil {
 		return err
 	}
-	b.r = router.New(dev, b.HostIP, b.HostIP6)
+	b.r = router.New(dev, b.HostIP, b.HostIP6, b.Routes)
 	b.done = make(chan error, 1)
 	go func() { b.done <- b.r.Run() }()
 	b.insts = map[string]*Instance{}
@@ -114,6 +115,9 @@ func (b *Backend) Apply(p weave.Plan) error {
 	}
 	slices.SortFunc(extra, func(a, b netip.Prefix) int { return a.Addr().Compare(b.Addr()) })
 	if err := b.net.SetRoutes(extra); err != nil {
+		return err
+	}
+	if err := b.net.SetExit(p.Exit != nil); err != nil {
 		return err
 	}
 	return b.net.SetDomains(p.Domains)
@@ -242,6 +246,26 @@ func (i *Instance) Status(ctx context.Context) (tailnet.Status, error) {
 		return tailnet.Status{}, err
 	}
 	return tailnet.FromIPN(i.name, st), nil
+}
+
+// SetExitNode makes the engine send internet traffic to the peer with the stable ID
+// peerID; "" turns that off.
+func (i *Instance) SetExitNode(ctx context.Context, peerID string) error {
+	i.mu.Lock()
+	srv := i.srv
+	i.mu.Unlock()
+	if srv == nil {
+		return errors.New("engine not running")
+	}
+	lc, err := srv.LocalClient()
+	if err != nil {
+		return err
+	}
+	_, err = lc.EditPrefs(ctx, &ipn.MaskedPrefs{
+		ExitNodeIDSet: true, ExitNodeIPSet: true,
+		Prefs: ipn.Prefs{ExitNodeID: tailcfg.StableNodeID(peerID)},
+	})
+	return err
 }
 
 // LoginError is why the last login attempt failed, or "".

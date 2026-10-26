@@ -51,6 +51,13 @@ func printStatus(w io.Writer, s daemon.State, o statusOptions) {
 		head += fmt.Sprintf(", %d unresolved conflicts", len(open))
 	}
 	fmt.Fprintln(w, head)
+	if e := s.ExitNode; e != nil {
+		style := ""
+		if !e.Available {
+			style = red
+		}
+		p.line(style, "%s", exitNodeLine(e))
+	}
 	for _, c := range open {
 		var devs []string
 		for _, d := range c.Devices {
@@ -83,11 +90,11 @@ func printStatus(w io.Writer, s daemon.State, o statusOptions) {
 			total++
 			if d.Online {
 				online++
-			} else if !o.all && d.Mapping == nil && d.RoutedIP == d.RealIP {
+			} else if !o.all && d.Mapping == nil && d.RoutedIP == d.RealIP && !usedExit(s.ExitNode, d) {
 				g.hidden++
 				continue
 			}
-			g.devices = append(g.devices, deviceRow(d, open))
+			g.devices = append(g.devices, deviceRow(d, open, s.ExitNode))
 			for _, r := range d.Routes {
 				g.devices = append(g.devices, routeRow(d, r, open))
 			}
@@ -124,7 +131,7 @@ func printStatus(w io.Writer, s daemon.State, o statusOptions) {
 }
 
 // deviceRow shows a device's name, the IP it is reachable at and what is special about it.
-func deviceRow(d weave.Device, open []weave.Conflict) row {
+func deviceRow(d weave.Device, open []weave.Conflict, exit *weave.Exit) row {
 	name, addr := cell{d.Name, ""}, cell{d.RealIP.String(), ""}
 	var notes []string
 	style := ""
@@ -138,6 +145,11 @@ func deviceRow(d weave.Device, open []weave.Conflict) row {
 			notes = append(notes, mapping(d))
 		}
 	}
+	if usedExit(exit, d) {
+		notes = append(notes, "exit node in use")
+	} else if d.ExitNode {
+		notes = append(notes, "exit node")
+	}
 	if !d.Online {
 		name.style = dim
 		if addr.style == "" {
@@ -149,6 +161,11 @@ func deviceRow(d weave.Device, open []weave.Conflict) row {
 		}
 	}
 	return row{name, addr, {strings.Join(notes, ", "), style}}
+}
+
+// usedExit reports whether d is the exit node in use.
+func usedExit(e *weave.Exit, d weave.Device) bool {
+	return e != nil && e.Tailnet == d.Tailnet && e.PeerID == d.PeerID
 }
 
 // routeRow shows a subnet route of a device below it: the prefix it is reachable at and

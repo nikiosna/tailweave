@@ -25,6 +25,7 @@ type Host struct {
 	Routes  []netip.Prefix // ranges always routed into the TUN
 
 	extra   []netip.Prefix // routes added by SetRoutes
+	exit    bool           // internet traffic goes into the TUN (SetExit)
 	domains []string
 	set     bool // domains were registered at least once
 }
@@ -43,6 +44,26 @@ func (h *Host) SetRoutes(ps []netip.Prefix) error {
 		}
 		h.extra = append(h.extra, p)
 	}
+	return nil
+}
+
+// SetExit sends this machine's internet traffic into the TUN, for an exit node, or no
+// longer. The networks the host reaches on its own stay where they are. IPv6 internet
+// traffic is blocked meanwhile; exit nodes carry IPv4 only so far.
+func (h *Host) SetExit(on bool) error {
+	if on == h.exit {
+		return nil
+	}
+	if !on {
+		h.unsetExit()
+		h.exit = false
+		return nil
+	}
+	if err := h.setExit(); err != nil {
+		h.unsetExit()
+		return err
+	}
+	h.exit = true
 	return nil
 }
 

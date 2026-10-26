@@ -26,7 +26,8 @@ const statusJSON = `{
       "TailscaleIPs": ["100.64.0.2", "fd7a:115c:a1e0::2"], "Online": true, "PrimaryRoutes": null},
     "nodekey:bb": {"ID": "3", "HostName": "router-b", "DNSName": "router-b.b.lab.",
       "TailscaleIPs": ["100.64.0.3", "fd7a:115c:a1e0::3"], "Online": true,
-      "PrimaryRoutes": ["10.99.0.0/24", "fd7a:115c:a1e0:b1a:0:8:a63:0/120", "0.0.0.0/0", "::/0", "fd00::/64"]}
+      "PrimaryRoutes": ["10.99.0.0/24", "fd7a:115c:a1e0:b1a:0:8:a63:0/120", "0.0.0.0/0", "::/0", "fd00::/64"],
+      "ExitNodeOption": true}
   }
 }`
 
@@ -56,13 +57,16 @@ func TestStatus(t *testing.T) {
 	}
 	slices.SortFunc(tn.Peers, func(a, b weave.Peer) int { return strings.Compare(a.ID, b.ID) })
 	p := tn.Peers[0]
-	if p.ID != "2" || p.Name != "peer-b2" || p.DNSName != "peer-b2.b.lab." || p.IPv4() != netip.MustParseAddr("100.64.0.2") || !p.Online || p.Routes != nil {
+	if p.ID != "2" || p.Name != "peer-b2" || p.DNSName != "peer-b2.b.lab." || p.IPv4() != netip.MustParseAddr("100.64.0.2") || !p.Online || p.Routes != nil || p.Exit {
 		t.Errorf("peer = %+v", p)
 	}
 	// Only IPv4 subnet routes and 4via6 routes; exit routes and other IPv6 routes are left out.
 	want := []netip.Prefix{netip.MustParsePrefix("10.99.0.0/24"), netip.MustParsePrefix("fd7a:115c:a1e0:b1a:0:8:a63:0/120")}
 	if r := tn.Peers[1].Routes; !slices.Equal(r, want) {
 		t.Errorf("router routes = %v, want %v", r, want)
+	}
+	if !tn.Peers[1].Exit {
+		t.Error("router-b does not offer itself as exit node")
 	}
 }
 

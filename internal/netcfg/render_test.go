@@ -68,6 +68,7 @@ table inet tailweave {
 		iifname "ts-b" ct state established,related accept
 		iifname "ts-b" oifname "twn1" ip saddr { 100.64.0.1, 100.64.0.2 } ip daddr 10.200.2.1 ct status dnat accept
 		iifname "ts-b" drop
+		iifname "twn1" oifname "twn1" drop
 	}
 	chain postrouting {
 		type nat hook postrouting priority srcnat - 1; policy accept;
@@ -93,6 +94,7 @@ table inet tailweave {
 		iifname "ts-a" ct state established,related accept
 		iifname "ts-a" oifname "twn0" ip saddr { 100.64.0.1 } ip daddr 10.200.1.1 ct status dnat accept
 		iifname "ts-a" drop
+		iifname "twn0" oifname "twn0" drop
 	}
 	chain postrouting {
 		type nat hook postrouting priority srcnat - 1; policy accept;
@@ -136,5 +138,23 @@ table ip tailweave {
 `
 	if got := HostRules(netip.MustParsePrefix("10.201.0.0/16")); got != want {
 		t.Errorf("HostRules:\n%s\nwant:\n%s", got, want)
+	}
+}
+
+func TestExitRoutes(t *testing.T) {
+	blocked := "route flush table 5181\nroute replace unreachable default table 5181\n"
+	p := plan
+	v4, v6 := ExitRoutes(p, nss)
+	if v4 != blocked || v6 != blocked {
+		t.Errorf("without exit node: %q, %q", v4, v6)
+	}
+	p.Exit = &weave.Exit{Tailnet: "b", PeerID: "4", Name: "exit-b"}
+	v4, v6 = ExitRoutes(p, nss)
+	if want := "route flush table 5181\nroute replace default via 10.200.2.2 table 5181\n"; v4 != want || v6 != blocked {
+		t.Errorf("exit node in b: %q, %q", v4, v6)
+	}
+	// Its tailnet is not running: blocked, not direct.
+	if v4, _ = ExitRoutes(p, nss[:1]); v4 != blocked {
+		t.Errorf("exit tailnet without namespace: %q", v4)
 	}
 }

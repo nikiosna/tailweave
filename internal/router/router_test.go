@@ -50,20 +50,13 @@ func newLab(t *testing.T) *lab {
 	t.Helper()
 	l := &lab{toHost: make(chan []byte, 16)}
 	l.host = newDevice(func(pkt []byte) { l.toHost <- append([]byte(nil), pkt...) })
-	l.r = New(l.host, hostIP, hostIP6)
+	l.r = New(l.host, hostIP, hostIP6, []netip.Prefix{
+		netip.MustParsePrefix("100.64.0.0/10"), netip.MustParsePrefix("198.18.0.0/15"), weave.ViaRange})
 	l.a = l.r.AddTailnet("a").(*device)
 	l.b = l.r.AddTailnet("b").(*device)
 	l.r.SetSelf("a", selfA, selfA6)
 	l.r.SetSelf("b", selfB, selfB6)
-	l.r.SetPlan(weave.Plan{Routes: map[netip.Addr]weave.Target{
-		peer:   {Tailnet: "a", IP: peer},
-		onlyA:  {Tailnet: "a", IP: onlyA},
-		mapped: {Tailnet: "b", IP: peer},
-	}, Subnets: map[netip.Prefix]weave.SubnetTarget{
-		labNet: {Tailnet: "a", Prefix: labNet},
-		block:  {Tailnet: "b", Prefix: labNet},
-		via7:   {Tailnet: "a", Prefix: via7},
-	}})
+	l.r.SetPlan(l.plan())
 	done := make(chan error, 1)
 	go func() { done <- l.r.Run() }()
 	t.Cleanup(func() {
@@ -73,6 +66,19 @@ func newLab(t *testing.T) *lab {
 		}
 	})
 	return l
+}
+
+// plan is the lab's plan.
+func (l *lab) plan() weave.Plan {
+	return weave.Plan{Routes: map[netip.Addr]weave.Target{
+		peer:   {Tailnet: "a", IP: peer},
+		onlyA:  {Tailnet: "a", IP: onlyA},
+		mapped: {Tailnet: "b", IP: peer},
+	}, Subnets: map[netip.Prefix]weave.SubnetTarget{
+		labNet: {Tailnet: "a", Prefix: labNet},
+		block:  {Tailnet: "b", Prefix: labNet},
+		via7:   {Tailnet: "a", Prefix: via7},
+	}}
 }
 
 // send makes the host send pkt into the router.
@@ -503,4 +509,54 @@ func check(t *testing.T, p []byte, proto byte, src, dst netip.Addr) {
 	if string(want) != string(p) {
 		t.Errorf("checksums wrong after rewrite:\n got % x\nwant % x", p, want)
 	}
+}
+
+func TestExitNode(t *testing.T) {
+	l := newLab(t)
+	internet := netip.MustParseAddr("198.51.100.10")
+
+	// Without an exit node, internet traffic goes nowhere.
+	l.send(build(protoTCP, hostIP, internet, 40000, 80, false))
+	none(t, l.a.in)
+	none(t, l.b.in)
+
+	p := l.plan()
+	p.Exit = &weave.Exit{Tailnet: "b", PeerID: "4", Name: "exit-b"}
+	l.r.SetPlan(p)
+	for _, proto := range []byte{protoTCP, protoUDP, protoICMP} {
+		// Into b, to the destination as it is, from b's own IP.
+		l.send(build(proto, hostIP, internet, 40000, 80, false))
+		check(t, recv(t, l.b), proto, selfB, internet)
+		none(t, l.a.in)
+		// The answer reaches the host from the internet address.
+		reply(l.b, build(proto, internet, selfB, 80, 40000, true))
+		check(t, recvHost(t, l), proto, internet, hostIP)
+	}
+	// Tailnet traffic still goes by the plan.
+	l.send(build(protoTCP, hostIP, peer, 40000, 80, false))
+	check(t, recv(t, l.a), protoTCP, selfA, peer)
+
+	// Never through the exit node: unrouted tailnet and pool addresses, 4via6, multicast,
+	// IPv6 (not supported yet).
+	for _, dst := range []string{"100.64.0.9", "198.18.5.5", "224.0.0.251", "255.255.255.255"} {
+		l.send(build(protoUDP, hostIP, netip.MustParseAddr(dst), 1, 2, false))
+	}
+	l.send(build(protoUDP, hostIP6, netip.MustParseAddr("2001:db8::1"), 1, 2, false))
+	l.send(build(protoUDP, hostIP6, netip.MustParseAddr("fd7a:115c:a1e0:b1a:0:9:a63:1"), 1, 2, false))
+	none(t, l.a.in)
+	none(t, l.b.in)
+
+	// Only the exit node's tailnet answers from the internet, and nobody from tailweave's
+	// own ranges: an unrouted peer, a pool address.
+	reply(l.a, build(protoTCP, internet, selfA, 80, 40000, true))
+	reply(l.b, build(protoTCP, netip.MustParseAddr("100.64.0.9"), selfB, 80, 40000, true))
+	reply(l.b, build(protoTCP, netip.MustParseAddr("198.18.0.77"), selfB, 80, 40000, true))
+	none(t, l.toHost)
+
+	// The exit node's tailnet is not attached: blocked, not direct.
+	p.Exit = &weave.Exit{Tailnet: "c", PeerID: "4", Name: "exit-c"}
+	l.r.SetPlan(p)
+	l.send(build(protoTCP, hostIP, internet, 40000, 80, false))
+	none(t, l.a.in)
+	none(t, l.b.in)
 }

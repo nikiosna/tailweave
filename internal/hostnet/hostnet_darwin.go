@@ -57,6 +57,29 @@ func (h *Host) delRoute(p netip.Prefix) {
 	}
 }
 
+// exitRoutes are the halves of both address spaces: more specific than the default route,
+// which stays, so Tailscale's own sockets still bind to the interface it leads to, and less
+// specific than any network the host reaches on its own.
+var exitRoutes = []netip.Prefix{
+	netip.MustParsePrefix("0.0.0.0/1"), netip.MustParsePrefix("128.0.0.0/1"),
+	netip.MustParsePrefix("::/1"), netip.MustParsePrefix("8000::/1"),
+}
+
+func (h *Host) setExit() error {
+	for _, p := range exitRoutes {
+		if err := h.addRoute(p); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (h *Host) unsetExit() {
+	for _, p := range exitRoutes {
+		h.delRoute(p)
+	}
+}
+
 func family(p netip.Prefix) string {
 	if p.Addr().Is4() {
 		return "-inet"
@@ -87,7 +110,10 @@ func (h *Host) Teardown() {
 	for _, p := range append(h.Routes, h.extra...) {
 		h.delRoute(p)
 	}
-	h.extra, h.domains, h.set = nil, nil, false
+	if h.exit {
+		h.unsetExit()
+	}
+	h.extra, h.domains, h.set, h.exit = nil, nil, false, false
 }
 
 // routedHere reports whether the route the kernel picks for p leads into the utun.

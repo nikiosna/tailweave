@@ -11,6 +11,10 @@
 // (or stay unrouted). Routes that overlap a network of this machine are never routed as
 // they are. 4via6 routes are unique by design and are never remapped.
 //
+// Exit nodes do not merge: there is one default route, so at most one exit node of one
+// tailnet is in use, the one the user picked. Internet traffic stays blocked while it is
+// not available, rather than leaving the machine directly.
+//
 // The package is pure: it computes a Plan from the tailnets' peers, the stored mappings
 // and the options. Applying the plan is up to the caller.
 package weave
@@ -31,6 +35,7 @@ type Peer struct {
 	IPs     []netip.Addr
 	Routes  []netip.Prefix // subnet routes this peer is the primary router for
 	Online  bool
+	Exit    bool // offers itself as exit node (advertised and approved)
 }
 
 // IPv4 returns the peer's tailnet IPv4 address, or the zero Addr.
@@ -70,6 +75,8 @@ func (m Mapping) key() peerKey { return peerKey{m.Tailnet, m.PeerID} }
 type Options struct {
 	AutoMap bool         // remap colliding devices and routes automatically
 	Pool    netip.Prefix // addresses for auto-mappings and suggestions
+	// ExitNode is the exit node the user picked, or nil.
+	ExitNode *DeviceRef
 	// Exclude are networks of this machine (LAN, tailweave's own ranges) that subnet
 	// routes must not take over. The pool is always excluded.
 	Exclude []netip.Prefix
@@ -91,7 +98,8 @@ type Device struct {
 	RealIP   netip.Addr `json:"realIP"`
 	RoutedIP netip.Addr `json:"routedIP"` // zero if the device is not reachable from this machine
 	Mapping  *Mapping   `json:"mapping,omitempty"`
-	Routes   []Route    `json:"routes,omitempty"` // subnet routes of the device
+	Routes   []Route    `json:"routes,omitempty"`   // subnet routes of the device
+	ExitNode bool       `json:"exitNode,omitempty"` // offers itself as exit node
 }
 
 // Route is a subnet route of a device and where it is reachable on this machine.
@@ -114,6 +122,7 @@ const (
 	ConflictMapping = "mapping" // a stored mapping cannot be applied
 	ConflictRoute   = "route"   // overlapping subnet routes in several tailnets
 	ConflictLocal   = "local"   // a subnet route overlaps a network of this machine
+	ConflictExit    = "exit"    // the picked exit node is not available
 )
 
 // DeviceRef identifies a device in a conflict.
@@ -132,6 +141,16 @@ type Conflict struct {
 	Message  string      `json:"message"`
 }
 
+// Exit is the exit node in use: this machine's internet traffic goes into its tailnet,
+// whether or not it is available, so nothing leaves directly while it is gone.
+type Exit struct {
+	Tailnet   string     `json:"tailnet"`
+	PeerID    string     `json:"peer"`
+	Name      string     `json:"name"`
+	IP        netip.Addr `json:"ip,omitzero"` // its tailnet IP; zero while it is not known
+	Available bool       `json:"available"`   // online and offering itself as exit node
+}
+
 // Local is this machine's own address in a tailnet.
 type Local struct {
 	IP          netip.Addr // the instance's tailnet IPv4
@@ -147,6 +166,7 @@ type Plan struct {
 	Names     map[string]netip.Addr         // lowercase FQDN with trailing dot -> routed IP
 	Domains   []string                      // MagicDNS suffixes of all tailnets, deduplicated
 	Devices   []Device                      // all peers, in tailnet priority order and by IP
+	Exit      *Exit                         // the exit node in use, or nil
 	Mappings  []Mapping                     // mappings to store: manual ones plus active auto ones
 	Conflicts []Conflict
 
@@ -314,6 +334,7 @@ func Compute(tailnets []Tailnet, mappings []Mapping, opt Options) Plan {
 				d.RoutedIP = d.RealIP
 			}
 			d.Routes = routes[k]
+			d.ExitNode = pe.Exit
 			p.Devices = append(p.Devices, d)
 
 			name := normName(pe.DNSName)
@@ -339,7 +360,36 @@ func Compute(tailnets []Tailnet, mappings []Mapping, opt Options) Plan {
 	for _, n := range nameOrder {
 		p.Conflicts = append(p.Conflicts, *nameConflicts[n])
 	}
+	p.addExit(tailnets, opt.ExitNode)
 	return p
+}
+
+// addExit puts the picked exit node into the plan, and a conflict if it is not available.
+func (p *Plan) addExit(tailnets []Tailnet, ref *DeviceRef) {
+	if ref == nil {
+		return
+	}
+	e := Exit{Tailnet: ref.Tailnet, PeerID: ref.PeerID, Name: ref.Name}
+	p.Exit = &e
+	msg := fmt.Sprintf("tailnet %s is not running", ref.Tailnet)
+	if i := slices.IndexFunc(tailnets, func(tn Tailnet) bool { return tn.Name == ref.Tailnet }); i >= 0 {
+		msg = "exit node is gone from its tailnet"
+		if j := slices.IndexFunc(tailnets[i].Peers, func(pe Peer) bool { return pe.ID == ref.PeerID }); j >= 0 {
+			pe := tailnets[i].Peers[j]
+			e.Name, e.IP = pe.Name, pe.IPv4()
+			switch {
+			case !pe.Exit:
+				msg = "device no longer offers itself as exit node"
+			case !pe.Online:
+				msg = "exit node is offline"
+			default:
+				e.Available = true
+				return
+			}
+		}
+	}
+	p.Conflicts = append(p.Conflicts, Conflict{Kind: ConflictExit, Key: e.Name,
+		Devices: []DeviceRef{{e.Tailnet, e.PeerID, e.Name}}, Message: msg + "; internet traffic is blocked"})
 }
 
 // Suggest returns a free pool address for a new mapping, or the zero Addr.

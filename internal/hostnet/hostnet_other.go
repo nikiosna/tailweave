@@ -19,3 +19,5 @@ func (h *Host) setDomains(domains []string) error { return errUnsupported }
 func (h *Host) Teardown()                         {}
 func (h *Host) addRoute(p netip.Prefix) error     { return errUnsupported }
 func (h *Host) delRoute(p netip.Prefix)           {}
+func (h *Host) setExit() error                    { return errUnsupported }
+func (h *Host) unsetExit()                        {}

@@ -95,11 +95,12 @@ func (c Config) statePath() string { return filepath.Join(c.StateDir, "state.jso
 
 // state is what tailweave changes at runtime and keeps across restarts.
 type state struct {
-	AutoMap  bool            `json:"autoMap"`
-	Tailnets []tailnetEntry  `json:"tailnets"` // in priority order: the first keeps colliding IPs
-	Mappings []weave.Mapping `json:"mappings"`
-	Operator *Operator       `json:"operator,omitempty"`
-	Stopped  bool            `json:"stopped,omitempty"` // `tailweave stop`; kept across restarts
+	AutoMap  bool             `json:"autoMap"`
+	Tailnets []tailnetEntry   `json:"tailnets"` // in priority order: the first keeps colliding IPs
+	Mappings []weave.Mapping  `json:"mappings"`
+	Operator *Operator        `json:"operator,omitempty"`
+	Stopped  bool             `json:"stopped,omitempty"`  // `tailweave stop`; kept across restarts
+	ExitNode *weave.DeviceRef `json:"exitNode,omitempty"` // picked by the user; kept while it is gone
 }
 
 // tailnetEntry is a tailnet added with `tailweave login`.

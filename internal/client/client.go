@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/Nikiosna/tailweave/internal/daemon"
+	"github.com/Nikiosna/tailweave/internal/weave"
 )
 
 // Client is a connection to the daemon's API.
@@ -52,6 +53,12 @@ func (c *Client) SetAutoMap(ctx context.Context, on bool) (daemon.State, error) 
 // operator. Only root may call it.
 func (c *Client) SetOperator(ctx context.Context, op daemon.Operator) (daemon.State, error) {
 	return c.do(ctx, http.MethodPut, "/api/options", daemon.Options{Operator: &op})
+}
+
+// SetExitNode sends this machine's internet traffic through a device of a tailnet; an
+// empty tailnet turns the exit node off.
+func (c *Client) SetExitNode(ctx context.Context, tailnet, peerID string) (daemon.State, error) {
+	return c.do(ctx, http.MethodPut, "/api/options", daemon.Options{ExitNode: &weave.DeviceRef{Tailnet: tailnet, PeerID: peerID}})
 }
 
 // Map routes a device at ip; without a valid ip the daemon picks a free pool address.

@@ -19,6 +19,12 @@
 // route can reach the host as well, as with Tailscale's --accept-routes, if their subnet
 // router does not masquerade them.
 //
+// With an exit node, the router passes the host's internet traffic into the exit node's
+// tailnet with the destination as it is and the engine's own IP as source, and the
+// answers back. Only the tailnet of the exit node may send packets from such addresses,
+// never from the ranges tailweave routes itself; the engine lets in nothing but answers.
+// While the exit node's tailnet is not attached, that traffic is dropped.
+//
 // The address translation is 1:1 and needs no state.
 package router
 
@@ -47,6 +53,9 @@ type Router struct {
 	host    tun.Device
 	hostIP  netip.Addr
 	hostIP6 netip.Addr // zero: no IPv6
+	// reserved are the ranges tailweave routes itself: never to an exit node, and never a
+	// source on the internet.
+	reserved []netip.Prefix
 
 	writeMu sync.Mutex // serializes writes to host
 
@@ -77,6 +86,7 @@ type tables struct {
 	in      map[string]map[netip.Addr]netip.Addr // tailnet -> real IP -> routed IP
 	subnets []subnet                             // routed prefixes, longest first
 	ports   map[string]*port
+	exit    *port // the exit node's tailnet; nil: none, or not attached
 }
 
 type target struct {
@@ -91,9 +101,10 @@ type subnet struct {
 }
 
 // New returns a router for the host TUN whose addresses on the host are hostIP and, for
-// IPv6, hostIP6 (may be zero). Call Run to start moving packets.
-func New(host tun.Device, hostIP, hostIP6 netip.Addr) *Router {
-	r := &Router{host: host, hostIP: hostIP, hostIP6: hostIP6, ports: map[string]*port{}}
+// IPv6, hostIP6 (may be zero). reserved are the ranges tailweave routes into the TUN
+// itself (tailnet addresses, pool, 4via6). Call Run to start moving packets.
+func New(host tun.Device, hostIP, hostIP6 netip.Addr, reserved []netip.Prefix) *Router {
+	r := &Router{host: host, hostIP: hostIP, hostIP6: hostIP6, reserved: reserved, ports: map[string]*port{}}
 	r.rebuild()
 	return r
 }
@@ -175,7 +186,17 @@ func (r *Router) rebuildLocked() {
 		}
 	}
 	slices.SortFunc(t.subnets, func(a, b subnet) int { return b.routed.Bits() - a.routed.Bits() })
+	if e := r.plan.Exit; e != nil {
+		t.exit = r.ports[e.Tailnet]
+	}
 	r.tab.Store(t)
+}
+
+// internet reports whether a may go to or come from an exit node: an IPv4 unicast address
+// outside the ranges tailweave routes itself.
+func (r *Router) internet(a netip.Addr) bool {
+	return a.Is4() && a.IsGlobalUnicast() &&
+		!slices.ContainsFunc(r.reserved, func(p netip.Prefix) bool { return p.Contains(a) })
 }
 
 // lookupOut finds where a packet from the host to dst goes: the tailnet and the real
@@ -262,6 +283,9 @@ func (r *Router) fromHost(q *packet.Parsed, pkt []byte) {
 	}
 	t := r.tab.Load()
 	tg, ok := t.lookupOut(q.Dst.Addr())
+	if !ok && t.exit != nil && r.internet(q.Dst.Addr()) {
+		tg, ok = target{t.exit, q.Dst.Addr()}, true
+	}
 	if !ok || !tg.real.IsValid() {
 		return
 	}
@@ -302,6 +326,9 @@ func (r *Router) fromTailnet(p *port, pkt []byte) {
 		return
 	}
 	routed, ok := t.lookupIn(p.name, q.Src.Addr())
+	if !ok && t.exit == cur && r.internet(q.Src.Addr()) {
+		routed, ok = q.Src.Addr(), true // an answer from the internet, through the exit node
+	}
 	if !ok || !routed.IsValid() {
 		return
 	}

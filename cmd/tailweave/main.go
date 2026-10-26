@@ -50,6 +50,9 @@ commands:
   set -auto-map=<true|false>         remap colliding devices automatically or not
   set -operator=<user>               let a user change tailweave without sudo
                                      (root only; -operator= removes it)
+  set -exit-node=<tailnet>/<device>  send internet traffic through an exit node;
+                                     -exit-node= turns it off
+  exit-node                          pick the exit node from a list
   map <tailnet> <device> [<ip>]      route a device at an IP (default: a free pool address)
   map <tailnet> <route> [<prefix>]   route a subnet route, e.g. 10.0.0.0/24, at a prefix
                                      of the same size (default: a free pool block)
@@ -92,6 +95,8 @@ func main() {
 		err = status(ctx, args)
 	case "set":
 		err = set(ctx, args)
+	case "exit-node":
+		err = exitNode(ctx, args)
 	case "map":
 		err = mapDevice(ctx, args)
 	case "unmap":
@@ -242,13 +247,23 @@ func set(ctx context.Context, args []string) error {
 		operator = &v
 		return nil
 	})
+	var exit *string
+	fs.Func("exit-node", "exit node as <tailnet>/<device> (empty: none)", func(v string) error {
+		exit = &v
+		return nil
+	})
 	if err := parse(fs, args); err != nil {
 		return err
 	}
-	if autoMap == nil && operator == nil {
+	if autoMap == nil && operator == nil && exit == nil {
 		return errUsage
 	}
 	c := client.New(*socket)
+	if exit != nil {
+		if err := setExitNode(ctx, c, *exit); err != nil {
+			return err
+		}
+	}
 	if operator != nil {
 		op := daemon.Operator{Name: *operator}
 		if op.Name != "" {

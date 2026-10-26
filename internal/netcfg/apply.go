@@ -27,6 +27,7 @@ type Host struct {
 	IPv6       bool           // route 4via6 routes; the namespaces have IPv6 addresses
 
 	routes  string // IPv4 and IPv6 scripts, as applied
+	exit    string // the same for ExitTable; empty: no exit node, no exit rules
 	rules   map[string]string
 	domains []string
 }
@@ -126,6 +127,9 @@ func (h *Host) Apply(p weave.Plan) error {
 		}
 		h.routes = routes
 	}
+	if err := h.applyExit(p); err != nil {
+		return err
+	}
 	if h.DNSAddr.IsValid() && !slices.Equal(p.Domains, h.domains) {
 		if err := RegisterDNS(DNSLink, h.DNSAddr, p.Domains); err != nil {
 			return err
@@ -133,6 +137,66 @@ func (h *Host) Apply(p weave.Plan) error {
 		h.domains = slices.Clone(p.Domains)
 	}
 	return nil
+}
+
+// applyExit routes this machine's internet traffic into the exit node's namespace while
+// one is picked.
+func (h *Host) applyExit(p weave.Plan) error {
+	if p.Exit == nil {
+		if h.exit != "" {
+			DeleteExitRules()
+			h.exit = ""
+		}
+		return nil
+	}
+	v4, v6 := ExitRoutes(p, h.Namespaces)
+	if v4+v6 == h.exit {
+		return nil
+	}
+	if err := run(v4, "ip", "-batch", "-"); err != nil {
+		return err
+	}
+	if IPv6() {
+		if err := run(v6, "ip", "-6", "-batch", "-"); err != nil {
+			return err
+		}
+	}
+	if h.exit == "" {
+		if err := AddExitRules(); err != nil {
+			return err
+		}
+	}
+	h.exit = v4 + v6
+	return nil
+}
+
+// AddExitRules adds ExitRules for IPv4 and, if the host has it, IPv6. ExitTable must be
+// filled first, or the host is cut off for a moment.
+func AddExitRules() error {
+	for _, r := range ExitRules {
+		if err := run("", "ip", append([]string{"rule", "add"}, r...)...); err != nil {
+			return err
+		}
+		if IPv6() {
+			if err := run("", "ip", append([]string{"-6", "rule", "add"}, r...)...); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// DeleteExitRules deletes ExitRules, also when they exist more than once, and empties
+// ExitTable. The exact match leaves rules of other programs alone.
+func DeleteExitRules() {
+	for _, r := range ExitRules {
+		for run("", "ip", append([]string{"rule", "del"}, r...)...) == nil {
+		}
+		for run("", "ip", append([]string{"-6", "rule", "del"}, r...)...) == nil {
+		}
+	}
+	_ = run("", "ip", "route", "flush", "table", fmt.Sprint(ExitTable))
+	_ = run("", "ip", "-6", "route", "flush", "table", fmt.Sprint(ExitTable))
 }
 
 // RegisterDNS makes systemd-resolved send queries for the tailnet domains to addr, via
@@ -159,6 +223,7 @@ func RegisterDNS(link string, addr netip.Addr, domains []string) error {
 // rules at other priorities or for other tables stay. Errors are ignored: parts may not
 // exist.
 func (h *Host) Teardown() {
+	DeleteExitRules()
 	DeleteRule()
 	_ = run("", "ip", "route", "flush", "table", fmt.Sprint(Table))
 	_ = run("", "ip", "-6", "route", "flush", "table", fmt.Sprint(Table))
@@ -171,7 +236,7 @@ func (h *Host) Teardown() {
 		}
 	}
 	_ = run("", "ip", "link", "del", DNSLink) // resolved forgets the link's settings with it
-	h.routes, h.rules, h.domains = "", nil, nil
+	h.routes, h.exit, h.rules, h.domains = "", "", nil, nil
 }
 
 // ruleArgs selects tailweave's ip rule. iif lo matches locally generated traffic only;

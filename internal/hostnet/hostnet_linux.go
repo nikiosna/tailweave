@@ -54,6 +54,22 @@ func (h *Host) delRoute(p netip.Prefix) {
 	_ = run("", "ip", "route", "del", p.Masked().String(), "table", fmt.Sprint(netcfg.Table))
 }
 
+// setExit fills netcfg.ExitTable, then adds the rules that use it.
+func (h *Host) setExit() error {
+	table := fmt.Sprint(netcfg.ExitTable)
+	if err := run("", "ip", "route", "replace", "default", "dev", h.Tun, "src", h.HostIP.String(), "table", table); err != nil {
+		return err
+	}
+	if netcfg.IPv6() {
+		if err := run("", "ip", "-6", "route", "replace", "unreachable", "default", "table", table); err != nil {
+			return err
+		}
+	}
+	return netcfg.AddExitRules()
+}
+
+func (h *Host) unsetExit() { netcfg.DeleteExitRules() }
+
 func (h *Host) setDomains(domains []string) error {
 	return netcfg.RegisterDNS(h.Tun, h.DNS, domains)
 }
@@ -61,6 +77,8 @@ func (h *Host) setDomains(domains []string) error {
 // Teardown removes the rule and routes; the TUN's addresses go away with the device.
 // Errors are ignored: parts may not exist.
 func (h *Host) Teardown() {
+	netcfg.DeleteExitRules()
+	h.exit = false
 	netcfg.DeleteRule()
 	_ = run("", "ip", "route", "flush", "table", fmt.Sprint(netcfg.Table))
 	_ = run("", "ip", "-6", "route", "flush", "table", fmt.Sprint(netcfg.Table))

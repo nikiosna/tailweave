@@ -66,6 +66,7 @@ func (d *Daemon) login(req LoginRequest) error {
 		inst = d.insts[req.Name]
 	}
 	slog.Info("logging in", "tailnet", req.Name, "server", entry.LoginServer, "authkey", req.AuthKey != "")
+	delete(d.exits, req.Name) // logging in starts from fresh prefs
 	return inst.Up(tailnet.Login{LoginServer: entry.LoginServer, Hostname: entry.Hostname, AuthKey: req.AuthKey})
 }
 
@@ -128,6 +129,9 @@ func (d *Daemon) forget(name string) {
 	defer d.mu.Unlock()
 	d.st.Tailnets = slices.DeleteFunc(d.st.Tailnets, func(e tailnetEntry) bool { return e.Name == name })
 	d.st.Mappings = slices.DeleteFunc(d.st.Mappings, func(m weave.Mapping) bool { return m.Tailnet == name })
+	if d.st.ExitNode != nil && d.st.ExitNode.Tailnet == name {
+		d.st.ExitNode = nil
+	}
 	delete(d.status, name)
 	delete(d.tailnets, name)
 }

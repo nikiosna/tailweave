@@ -256,3 +256,52 @@ func TestSuggest(t *testing.T) {
 		t.Errorf("exhausted pool not reported: %+v", got.Conflicts)
 	}
 }
+
+func TestExitNode(t *testing.T) {
+	tns := lab()
+	exit := peer("4", "exit-b", "b.lab", "100.64.0.4")
+	exit.Exit, exit.Online = true, true
+	tns[1].Peers = append(tns[1].Peers, exit)
+	ref := &DeviceRef{Tailnet: "b", PeerID: "4", Name: "exit-b"}
+
+	p := Compute(tns, nil, Options{AutoMap: true, Pool: pool})
+	if p.Exit != nil || !device(t, p, "b", "exit-b").ExitNode || device(t, p, "b", "peer-b1").ExitNode {
+		t.Errorf("without a pick: exit = %+v, devices = %+v", p.Exit, p.Devices)
+	}
+
+	p = Compute(tns, nil, Options{AutoMap: true, Pool: pool, ExitNode: ref})
+	want := Exit{Tailnet: "b", PeerID: "4", Name: "exit-b", IP: ip("100.64.0.4"), Available: true}
+	if p.Exit == nil || *p.Exit != want {
+		t.Errorf("exit = %+v, want %+v", p.Exit, want)
+	}
+	if cs := conflicts(p, ConflictExit); len(cs) != 0 {
+		t.Errorf("exit conflicts = %+v", cs)
+	}
+
+	// Not available: the plan keeps the exit node, so traffic stays blocked, and says why.
+	for _, c := range []struct {
+		name string
+		tns  func() []Tailnet
+		msg  string
+	}{
+		{"offline", func() []Tailnet {
+			x := lab()
+			e := exit
+			e.Online = false
+			x[1].Peers = append(x[1].Peers, e)
+			return x
+		}, "exit node is offline"},
+		{"withdrawn", func() []Tailnet { x := lab(); e := exit; e.Exit = false; x[1].Peers = append(x[1].Peers, e); return x }, "device no longer offers itself as exit node"},
+		{"gone", lab, "exit node is gone from its tailnet"},
+		{"tailnet down", func() []Tailnet { return lab()[:1] }, "tailnet b is not running"},
+	} {
+		p := Compute(c.tns(), nil, Options{AutoMap: true, Pool: pool, ExitNode: ref})
+		if p.Exit == nil || p.Exit.Available || p.Exit.Tailnet != "b" || p.Exit.Name != "exit-b" {
+			t.Errorf("%s: exit = %+v, want an unavailable exit-b", c.name, p.Exit)
+		}
+		cs := conflicts(p, ConflictExit)
+		if len(cs) != 1 || cs[0].Resolved || cs[0].Message != c.msg+"; internet traffic is blocked" {
+			t.Errorf("%s: conflicts = %+v", c.name, cs)
+		}
+	}
+}
