@@ -153,6 +153,19 @@ device shows up with its routed address (e.g. `198.18.0.1`); a device whose IP c
 is unresolved does not get in. The tailnets never reach each other or your LAN through
 tailweave.
 
+To send this machine's internet traffic through an exit node of one of the tailnets,
+pick it from a list, or name it:
+
+```sh
+sudo tailweave exit-node              # ↑/↓ and enter; "none" turns it off
+sudo tailweave set -exit-node=home/nas
+sudo tailweave set -exit-node=        # off again
+```
+
+All tailnets stay reachable, and so do your LAN and other networks this machine reaches
+on its own. If the exit node goes offline or its tailnet is logged out, internet traffic
+is blocked until it is back or you pick another one (`tailweave status` says so).
+
 `sudo tailweave logout <tailnet>` logs out and keeps the tailnet,
 `sudo tailweave remove <tailnet>` forgets it.
 
@@ -160,7 +173,9 @@ tailweave.
 
 - **Quit other VPNs first.** Tailscale and other VPN clients that use the same ranges
   cannot run next to tailweave; it refuses to start until they are gone.
-- **No exit nodes** yet.
+- **Exit nodes carry IPv4 only.** While one is in use, IPv6 internet traffic is blocked.
+  DNS queries go wherever your resolver is: through the exit node if it is on the
+  internet, directly if it is on your LAN.
 - **IPv6 only for 4via6 routes.** Peers' own IPv6 addresses are not routed, and 4via6
   routes that two tailnets both use stay with the tailnet listed first. On macOS, names
   like `10-0-0-7-via-7.<domain>` only resolve while the Mac has IPv6 connectivity (the

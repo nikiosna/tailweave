@@ -18,7 +18,7 @@
   * { box-sizing: border-box; }
   body { margin: 0; background: var(--bg); color: var(--text);
     font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; }
-  main { max-width: 1100px; margin: 0 auto; padding: 24px 16px 48px; }
+  main { max-width: 1240px; margin: 0 auto; padding: 24px 16px 48px; }
   header { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; margin-bottom: 20px; }
   h1 { font-size: 20px; margin: 0; margin-right: auto; }
   h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted);
@@ -50,6 +50,8 @@
   input[type=text] { font: inherit; padding: 3px 8px; border-radius: 6px; border: 1px solid var(--line);
     background: var(--bg); color: var(--text); width: 140px; }
   label.toggle { display: flex; gap: 8px; align-items: center; cursor: pointer; }
+  select { font: inherit; padding: 2px 6px; border-radius: 6px; border: 1px solid var(--line);
+    background: var(--panel); color: var(--text); }
   #msg { color: var(--bad); min-height: 1.4em; }
   .empty { padding: 12px 14px; color: var(--muted); }
 </style>
@@ -60,6 +62,7 @@
     <h1>tailweave</h1>
     <span class="muted">DNS <span class="mono" id="dns"></span></span>
     <label class="toggle"><input type="checkbox" id="automap"> Remap colliding IPs and routes automatically</label>
+    <label class="toggle">Exit node <select id="exitnode"></select></label>
     <button id="power"></button>
   </header>
   <div class="panel notice" id="stopped" hidden>
@@ -84,7 +87,8 @@
 const $ = id => document.getElementById(id);
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 let state = null, editing = null; // editing: "tailnet/peer" or "tailnet route" while a map form is open
-const kinds = {ip: "same IP", name: "same name", route: "same route", local: "local network", mapping: "mapping"};
+const kinds = {ip: "same IP", name: "same name", route: "same route", local: "local network", mapping: "mapping", exit: "exit node"};
+const isExit = (d, e) => e && e.tailnet === d.tailnet && e.peer === d.peer;
 const isVia = p => p.startsWith("fd7a:115c:a1e0:b1a:");
 
 async function api(method, path, body) {
@@ -110,6 +114,17 @@ function render() {
   $("power").textContent = s.stopped ? "Start" : "Stop";
   $("power").className = s.stopped ? "primary" : "";
   $("stopped").hidden = !s.stopped;
+
+  // The exit nodes on offer, and the one in use even when it is gone. Only rebuilt when it
+  // changes, so polling does not close the list while it is open.
+  const ex = s.exitNode;
+  const offers = (s.devices || []).filter(d => d.exitNode || isExit(d, ex));
+  if (ex && !offers.some(d => isExit(d, ex))) offers.push({tailnet: ex.tailnet, peer: ex.peer, name: ex.name});
+  const opts = `<option value="">None</option>` + offers.map(d =>
+    `<option value="${esc(d.tailnet + "/" + d.peer)}">${esc(d.name)} (${esc(d.tailnet)})${d.exitNode ? (d.online ? "" : ", offline") : ", not offered"}</option>`).join("");
+  if ($("exitnode").dataset.opts !== opts) { $("exitnode").innerHTML = opts; $("exitnode").dataset.opts = opts; }
+  $("exitnode").value = ex ? ex.tailnet + "/" + ex.peer : "";
+  $("exitnode").disabled = s.stopped;
 
   const ts = s.tailnets || [];
   $("tailnets").innerHTML = ts.length ? ts.map(t => `
@@ -144,8 +159,11 @@ function render() {
       actions = `<button data-edit="${esc(key)}">Map IP</button>` +
         (d.mapping ? ` <button data-unmap="${esc(key)}">Unmap</button>` : "");
     }
+    const exitChip = isExit(d, s.exitNode)
+      ? ` <span class="chip ${s.exitNode.available ? "ok" : "bad"}">exit node in use</span>`
+      : d.exitNode ? ` <span class="chip">exit node</span>` : "";
     return `<tr>
-      <td><span class="dot ${d.online ? "on" : ""}"></span>${esc(d.name)}</td>
+      <td><span class="dot ${d.online ? "on" : ""}"></span>${esc(d.name)}${exitChip}</td>
       <td>${esc(d.tailnet)}</td>
       <td class="mono">${esc((d.dnsName || "").replace(/\.$/, ""))}</td>
       <td class="mono">${esc(d.realIP)}</td>
@@ -203,6 +221,10 @@ document.addEventListener("keydown", e => {
   if (e.key === "Escape" && editing) { editing = null; render(); }
 });
 $("automap").addEventListener("change", e => act("PUT", "/api/options", {autoMap: e.target.checked}));
+$("exitnode").addEventListener("change", e => {
+  const [tailnet, peer] = e.target.value ? e.target.value.split("/") : ["", ""];
+  act("PUT", "/api/options", {exitNode: {tailnet, peer}});
+});
 $("power").addEventListener("click", () => act("POST", state.stopped ? "/api/start" : "/api/stop"));
 
 async function poll() {

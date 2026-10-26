@@ -1,6 +1,7 @@
 package hostnet
 
 import (
+	"fmt"
 	"net/netip"
 	"os/exec"
 	"strings"
@@ -65,7 +66,29 @@ var exitRoutes = []netip.Prefix{
 	netip.MustParsePrefix("::/1"), netip.MustParsePrefix("8000::/1"),
 }
 
+// setExit routes the halves into the utun. Tailscale binds its own sockets to the
+// interface of the default route (IP_BOUND_IF), and such sockets only use routes scoped to
+// that interface; without a scoped default route, they would fall back to the halves and
+// loop into the utun. macOS does not always have one (a single network service, as in the
+// lab's VM), so tailweave adds it as long as the exit node is in use.
 func (h *Host) setExit() error {
+	for _, fam := range []string{"-inet", "-inet6"} {
+		ifc, gw, ok := defaultRoute(fam)
+		if !ok || ifc == h.Tun {
+			continue
+		}
+		// A lookup with -ifscope falls back to the unscoped route, so just try. route(8)
+		// exits with 0 when the route exists already; then it is not tailweave's to delete.
+		args := []string{"-n", "add", fam, "-ifscope", ifc, "default", gw}
+		out, err := exec.Command("route", args...).CombinedOutput()
+		switch {
+		case strings.Contains(string(out), "File exists"):
+		case err != nil:
+			return fmt.Errorf("route %s: %w: %s", strings.Join(args, " "), err, strings.TrimSpace(string(out)))
+		default:
+			h.scoped = append(h.scoped, fam+" "+ifc)
+		}
+	}
 	for _, p := range exitRoutes {
 		if err := h.addRoute(p); err != nil {
 			return err
@@ -78,6 +101,37 @@ func (h *Host) unsetExit() {
 	for _, p := range exitRoutes {
 		h.delRoute(p)
 	}
+	for _, s := range h.scoped {
+		fam, ifc, _ := strings.Cut(s, " ")
+		_ = run("", "route", "-q", "-n", "delete", fam, "-ifscope", ifc, "default")
+	}
+	h.scoped = nil
+}
+
+// defaultRoute returns the interface and gateway of the default route of a family
+// ("-inet", "-inet6"), if there is one.
+func defaultRoute(fam string) (ifc, gw string, ok bool) {
+	out, err := exec.Command("route", "-n", "get", fam, "default").Output()
+	if err != nil {
+		return "", "", false
+	}
+	var dest string
+	for _, l := range strings.Split(string(out), "\n") {
+		k, v, found := strings.Cut(strings.TrimSpace(l), ":")
+		if !found {
+			continue
+		}
+		switch v = strings.TrimSpace(v); k {
+		case "destination":
+			dest = v
+		case "gateway":
+			gw = v
+		case "interface":
+			ifc = v
+		}
+	}
+	// Without a default route, the lookup ends at a less specific route such as ::/1.
+	return ifc, gw, dest == "default" && ifc != "" && gw != ""
 }
 
 func family(p netip.Prefix) string {

@@ -58,7 +58,11 @@ no personal paths. Commit locally only; pushing is done by the maintainer.
    - [x] `tailweave stop`/`start`: the daemon keeps serving its API but tears the host
      setup down (instances, DNS, backend), so another VPN can run; kept in the state
      across restarts; start runs preflight again (`TestStopStart`)
-   - [ ] Remaining conflicts: exit nodes
+   - [x] Exit nodes: the user picks at most one (`tailweave set -exit-node=<tailnet>/<device>`,
+     the picker `tailweave exit-node`, or the web UI); the host's internet traffic goes into
+     that tailnet, the rest stays merged and the LAN local; fail closed while it is not
+     available (conflict `exit`); IPv6 internet blocked meanwhile (`TestExitNode` on both
+     backends and macOS, `TestIsolation/exit_node`)
 3. **macOS version** *(in progress)*
    - [x] Backend `tsnet` (`internal/engine`, `internal/router`, `internal/hostnet`): one
      in-process tsnet engine per tailnet, each with an in-memory TUN, behind a userspace
@@ -130,6 +134,12 @@ Keep this list current when finishing or starting a step.
   as 4via6, site 7 on router-a and site 8 on router-b), `exit-nodes` (exit-a,
   exit-b), `dns-suffix` (both tailnets use base domain a.lab). Tests that need a
   scenario call `labtest.RequireScenario`, which also accepts `all`.
+- The exit-nodes scenario adds the network `wan` (203.0.113.0/24, no address on the VM's
+  bridge, so the VM has no route there) with exit-a (.2), exit-b (.3) and `inet` (.10).
+  inet answers HTTP on 198.51.100.10, one hop behind its wan address (exit nodes do not
+  let clients into networks they are attached to), with the address it was reached from:
+  `curl 198.51.100.10` prints 203.0.113.2 through exit-a, 203.0.113.3 through exit-b, and
+  fails without an exit node. Peers take extra routes from `LAB_EXTRA_ROUTES`.
 - Peer test services: HTTP :80 and UDP :8 return the peer name, UDP :7 echo,
   iperf3 server. Use them to tell which tailnet answered. TCP :9 is a probe that connects
   back on request (`lab/peer/probe.sh`: send `tcp|udp|ping <IPv4> <port>`, get the answer),
@@ -177,9 +187,10 @@ Keep this list current when finishing or starting a step.
 - Pass auth keys to `tailscale up` as `--auth-key=file:...` so they don't show up in `ps`.
 - Do not name host interfaces `tw-*` other than the playground veths (iptables match `tw-+`).
   tailweave's DNS link is `tailweave0` and its veths are `twh<i>` for that reason.
-- tailweave owns routing table 5180 (IPv4 and IPv6; ip rule pref 5180, `iif lo`, so only locally
-  generated traffic uses it; tailscaled uses table 52 and prefs 5210-5270, so never touch
-  rules by priority alone, delete the exact `pref 5180 iif lo lookup 5180`), nft table `inet tailweave` in each namespace (DNAT, forward
+- tailweave owns routing table 5180 (IPv4 and IPv6; ip rule pref 5180, `iif lo`, so only
+  locally generated traffic uses it; tailscaled uses table 52 and prefs 5210-5270, so never
+  touch rules by priority alone, delete the exact `pref 5180 iif lo lookup 5180`), table
+  5181 with prefs 5181-5183 for exit nodes (see below), nft table `inet tailweave` in each namespace (DNAT, forward
   filter that drops new traffic from the tailnet, masquerade) and nft table `ip tailweave`
   on the host (masquerade for the transit range, forward filter that drops new traffic
   into `twh+`), plus two `twh+` ACCEPT rules in iptables `DOCKER-USER` if that chain exists
@@ -187,6 +198,25 @@ Keep this list current when finishing or starting a step.
   exit; the tailscaled state in `<stateDir>/tailnets/<name>` stays. It also sets the
   host's `net.ipv4.ip_forward=1` and leaves it on. tailscaled's own netfilter rules in
   the namespaces stay on and let the forwarded host traffic through.
+- Exit nodes: the picked node's tailnet gets it as pref (`ExitNodeID` via LocalAPI
+  `PATCH prefs` or tsnet's `EditPrefs`), the others none; the daemon sets it again after a
+  login (`tailscale up --reset` clears prefs). On Linux, only while one is picked, rules
+  5181 (`fwmark 0x80000/0xff0000 lookup main`: Tailscale's own sockets, i.e. the tsnet
+  engines'), 5182 (`iif lo lookup main suppress_prefixlength 0`: the host's own networks)
+  and 5183 (`iif lo lookup 5181`) send the rest to table 5181: `default via` the exit
+  namespace or `dev tailweave0`, `unreachable default` while that tailnet is not running,
+  and always `unreachable default` for IPv6. macOS routes 0/1, 128.0/1, ::/1 and 8000::/1
+  into the utun; the default route stays, so tsnet's sockets keep binding to its
+  interface (`IP_BOUND_IF`). Bound sockets only use routes scoped to that interface, and
+  macOS does not always have a scoped default (the macOS VM has none): without one they
+  fall back to the halves and loop into the utun. So tailweave adds `route add -ifscope
+  <if> default <gw>` while the exit node is in use, unless one exists (`route` then says
+  "File exists" and still exits 0; `route get -ifscope` falls back to the unscoped route
+  and cannot tell). The namespaces drop `veth -> veth`, so host traffic never
+  hairpins out when tailscaled is down. The router sends only IPv4 unicast outside its
+  own ranges to the exit tailnet and takes such sources only from it. Preflight claims
+  the rules and table 5181; picking an exit node fails while another program holds the
+  /1 halves.
 - Subnet routes: tailscaled runs with `--accept-routes` (set again at every start, for
   state from older versions), tsnet with `RouteAll`. In each namespace, a rule at pref
   5200 (`lookup main suppress_prefixlength 0`, IPv4 and IPv6) keeps the veth's network

@@ -20,9 +20,13 @@ def resolve(name):
     return r.stdout.split()[0] if r.stdout else None
 
 
-def device(name):
+def state():
     with urllib.request.urlopen(UI + "/api/state") as r:
-        return next(d for d in json.load(r)["devices"] if d["name"] == name)
+        return json.load(r)
+
+
+def device(name):
+    return next(d for d in state()["devices"] if d["name"] == name)
 
 
 def check(what, got, want):
@@ -86,6 +90,18 @@ with sync_playwright() as p:
         check("router-b behind the mapped prefix", r.stdout.strip(), "router-b")
         row.get_by_role("button", name="Unmap").click()
         expect(row).to_contain_text("auto-mapped")
+
+    # Exit nodes (scenario exit-nodes): pick exit-a, see it used, turn it off again.
+    if any(d.get("exitNode") for d in state()["devices"]):
+        page.select_option("#exitnode", label="exit-a (a)")
+        expect(page.locator("#devices tr", has_text="exit-a")).to_contain_text("exit node in use")
+        check("exit node in the state", state().get("exitNode", {}).get("name"), "exit-a")
+        r = subprocess.run(["curl", "-s", "-m5", "http://198.51.100.10/"], capture_output=True, text=True)
+        check("internet through exit-a", r.stdout.strip(), "203.0.113.2")
+        page.screenshot(path=f"{out}/7-exit-node.png", full_page=True)
+        page.select_option("#exitnode", label="None")
+        expect(page.locator("#devices tr", has_text="exit-a")).not_to_contain_text("in use")
+        check("exit node off", state().get("exitNode"), None)
 
     page.get_by_role("button", name="Stop", exact=True).click()
     expect(page.locator("#stopped")).to_be_visible()

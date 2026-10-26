@@ -47,12 +47,16 @@ tailnets do not reach each other, and the LAN does not reach them](docs/how-it-w
   remapped: automatically (the tailnet listed first keeps the IP, the others get an
   address from `198.18.0.0/15`) or by hand (`tailweave map`). Subnet routes follow the
   same model, with blocks of the same size; 4via6 routes work as they are.
+- **One exit node at a time.** Pick an exit node of any tailnet; the host's internet
+  traffic goes through it while all tailnets stay reachable and the LAN stays local.
+  If it goes away, internet traffic is blocked rather than leaving directly.
 - **Own DNS service** replacing MagicDNS: names always resolve to the IP the device is
   actually reachable at, so collisions only matter when you type raw IPs.
 - **Daemon with a CLI:** `tailweave login <name>` adds a tailnet (web link or
   `-auth-key <key>`), `tailweave status` shows tailnets, peers and conflicts,
   `tailweave set -auto-map=...` switches auto-mapping, `tailweave map`/`unmap` map
-  devices by hand, `logout`/`remove` leave a tailnet, `stop`/`start` switch tailweave
+  devices by hand, `tailweave exit-node` (or `set -exit-node=<tailnet>/<device>`) picks
+  the exit node, `logout`/`remove` leave a tailnet, `stop`/`start` switch tailweave
   off for another VPN and on again. `tailweave ui` starts an optional
   web UI showing the same.
 
@@ -78,6 +82,11 @@ tailnets with each other or with your LAN:
   delivers it locally and never forwards it, neither into another tailnet nor anywhere
   else. Its namespace refuses to forward anything else that arrives from the tailnet,
   and the host forwards no new connections between namespaces.
+- **Exit node:** only for the host. With an exit node picked, the host's internet
+  traffic leaves through it; networks the host reaches on its own (LAN, routes of its
+  own) stay direct. IPv6 internet traffic is blocked meanwhile, and DNS goes wherever the
+  host's resolver is: a resolver on the internet through the exit node, one on the LAN
+  directly. The LAN and the tailnets do not get to the internet through it.
 - **LAN → tailnets:** no. tailweave routes only traffic the host itself generates into
   the tailnets and drops new forwarded connections into the namespaces, so a device
   that routes `100.64.0.0/10` via your machine does not get into a tailnet. Containers
@@ -95,7 +104,7 @@ any two VPNs running side by side.
 | Overlapping subnet routes | Remap automatically to a pool block of the same size, or map the route by hand |
 | Subnet route overlaps the local LAN | Remap like an overlapping route; the LAN stays where it is |
 | MagicDNS (`100.100.100.100`) | tailweave's DNS service takes over |
-| Several exit nodes | Allow only one |
+| Several exit nodes | You pick at most one; while it is not available, internet traffic is blocked |
 | Same DNS names | The tailnet listed first wins |
 
 ## Development lab
@@ -113,6 +122,8 @@ offering TCP, UDP and iperf3 test services, and scenarios for the conflicts abov
  peer-a2 100.64.0.2              peer-b2 100.64.0.2
  router-a  10.99.0.0/24          router-b  10.99.0.0/24, 192.168.104.0/24
  exit-a    exit node             exit-b    exit node
+                 │ wan 203.0.113.0/24 (exit nodes only)
+                 inet 198.51.100.10: answers with the exit node it came through
 ```
 
 ```sh

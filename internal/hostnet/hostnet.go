@@ -26,6 +26,7 @@ type Host struct {
 
 	extra   []netip.Prefix // routes added by SetRoutes
 	exit    bool           // internet traffic goes into the TUN (SetExit)
+	scoped  []string       // macOS: families ("-inet", "-inet6") whose scoped default route tailweave added
 	domains []string
 	set     bool // domains were registered at least once
 }
