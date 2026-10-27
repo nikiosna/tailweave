@@ -52,7 +52,8 @@ commands:
                                      (root only; -operator= removes it)
   set -exit-node=<tailnet>/<device>  send internet traffic through an exit node;
                                      -exit-node= turns it off
-  exit-node                          pick the exit node from a list
+  exit-node                          pick the exit node from a list, by country and
+                                     city for exit nodes with a location (Mullvad)
   map <tailnet> <device> [<ip>]      route a device at an IP (default: a free pool address)
   map <tailnet> <route> [<prefix>]   route a subnet route, e.g. 10.0.0.0/24, at a prefix
                                      of the same size (default: a free pool block)

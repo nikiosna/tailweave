@@ -5,6 +5,7 @@ import (
 	"slices"
 	"testing"
 
+	"github.com/Nikiosna/tailweave/internal/weave"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/key"
@@ -20,7 +21,8 @@ func TestFromIPN(t *testing.T) {
 		Self:           &ipnstate.PeerStatus{ID: "9", DNSName: "dut-a.a.lab.", TailscaleIPs: []netip.Addr{netip.MustParseAddr("100.64.0.9")}},
 		Peer: map[key.NodePublic]*ipnstate.PeerStatus{
 			key.NewNode().Public(): {ID: tailcfg.StableNodeID("3"), DNSName: "router-a.a.lab.", Online: true,
-				TailscaleIPs: []netip.Addr{netip.MustParseAddr("100.64.0.3")}, PrimaryRoutes: &pr},
+				TailscaleIPs: []netip.Addr{netip.MustParseAddr("100.64.0.3")}, PrimaryRoutes: &pr,
+				Location: &tailcfg.Location{Country: "Sweden", CountryCode: "SE", City: "Malmö", CityCode: "MMA", Priority: 5}},
 		},
 	}
 	tn := FromIPN("a", st).Tailnet
@@ -29,5 +31,8 @@ func TestFromIPN(t *testing.T) {
 	}
 	if r := tn.Peers[0].Routes; !slices.Equal(r, routes[:1]) {
 		t.Errorf("routes = %v, want only the subnet route", r)
+	}
+	if l := tn.Peers[0].Location; l == nil || *l != (weave.Location{Country: "Sweden", CountryCode: "SE", City: "Malmö", CityCode: "MMA", Priority: 5}) {
+		t.Errorf("location = %+v", l)
 	}
 }

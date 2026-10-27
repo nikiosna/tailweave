@@ -27,7 +27,9 @@ const statusJSON = `{
     "nodekey:bb": {"ID": "3", "HostName": "router-b", "DNSName": "router-b.b.lab.",
       "TailscaleIPs": ["100.64.0.3", "fd7a:115c:a1e0::3"], "Online": true,
       "PrimaryRoutes": ["10.99.0.0/24", "fd7a:115c:a1e0:b1a:0:8:a63:0/120", "0.0.0.0/0", "::/0", "fd00::/64"],
-      "ExitNodeOption": true}
+      "ExitNodeOption": true,
+      "Location": {"Country": "Germany", "CountryCode": "DE", "City": "Frankfurt", "CityCode": "FRA",
+        "Latitude": 50.11, "Longitude": 8.68, "Priority": 100}}
   }
 }`
 
@@ -67,6 +69,9 @@ func TestStatus(t *testing.T) {
 	}
 	if !tn.Peers[1].Exit {
 		t.Error("router-b does not offer itself as exit node")
+	}
+	if l := tn.Peers[1].Location; l == nil || *l != (weave.Location{Country: "Germany", CountryCode: "DE", City: "Frankfurt", CityCode: "FRA", Priority: 100}) {
+		t.Errorf("location = %+v", l)
 	}
 }
 

@@ -48,6 +48,13 @@ type node struct {
 	PrimaryRoutes []netip.Prefix
 	// ExitNodeOption is set if the node offers itself as exit node (advertised and approved).
 	ExitNodeOption bool
+	Location       *location
+}
+
+// location is a subset of tailcfg.Location.
+type location struct {
+	Country, CountryCode, City, CityCode string
+	Priority                             int
 }
 
 type status struct {
@@ -158,6 +165,10 @@ func peerAPIPort(n *node, ip netip.Addr) uint16 {
 func peer(n *node) weave.Peer {
 	p := weave.Peer{ID: n.ID, Name: machineName(n), DNSName: n.DNSName, IPs: n.TailscaleIPs, Online: n.Online,
 		Exit: n.ExitNodeOption}
+	if l := n.Location; l != nil {
+		p.Location = &weave.Location{Country: l.Country, CountryCode: l.CountryCode, City: l.City,
+			CityCode: l.CityCode, Priority: l.Priority}
+	}
 	for _, r := range n.PrimaryRoutes {
 		if weave.Routable(r) {
 			p.Routes = append(p.Routes, r)

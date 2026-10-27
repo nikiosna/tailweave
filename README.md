@@ -56,7 +56,8 @@ tailnets do not reach each other, and the LAN does not reach them](docs/how-it-w
   `-auth-key <key>`), `tailweave status` shows tailnets, peers and conflicts,
   `tailweave set -auto-map=...` switches auto-mapping, `tailweave map`/`unmap` map
   devices by hand, `tailweave exit-node` (or `set -exit-node=<tailnet>/<device>`) picks
-  the exit node, `logout`/`remove` leave a tailnet, `stop`/`start` switch tailweave
+  the exit node, grouped by country and city where exit nodes say where they are
+  (Mullvad), `logout`/`remove` leave a tailnet, `stop`/`start` switch tailweave
   off for another VPN and on again. `tailweave ui` starts an optional
   web UI showing the same.
 

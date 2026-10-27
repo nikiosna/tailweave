@@ -29,6 +29,10 @@ func FromIPN(name string, st *ipnstate.Status) Status {
 func fromPeerStatus(p *ipnstate.PeerStatus) *node {
 	n := &node{ID: string(p.ID), HostName: p.HostName, DNSName: p.DNSName,
 		TailscaleIPs: p.TailscaleIPs, PeerAPIURL: p.PeerAPIURL, Online: p.Online, ExitNodeOption: p.ExitNodeOption}
+	if l := p.Location; l != nil {
+		n.Location = &location{Country: l.Country, CountryCode: l.CountryCode, City: l.City,
+			CityCode: l.CityCode, Priority: l.Priority}
+	}
 	if p.PrimaryRoutes != nil {
 		n.PrimaryRoutes = p.PrimaryRoutes.AsSlice()
 	}

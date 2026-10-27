@@ -120,8 +120,21 @@ function render() {
   const ex = s.exitNode;
   const offers = (s.devices || []).filter(d => d.exitNode || isExit(d, ex));
   if (ex && !offers.some(d => isExit(d, ex))) offers.push({tailnet: ex.tailnet, peer: ex.peer, name: ex.name});
-  const opts = `<option value="">None</option>` + offers.map(d =>
-    `<option value="${esc(d.tailnet + "/" + d.peer)}">${esc(d.name)} (${esc(d.tailnet)})${d.exitNode ? (d.online ? "" : ", offline") : ", not offered"}</option>`).join("");
+  // Those with a location (Mullvad's, for example) go into one group per country, by city.
+  const opt = (d, label) =>
+    `<option value="${esc(d.tailnet + "/" + d.peer)}">${esc(label)}${d.exitNode ? (d.online ? "" : ", offline") : ", not offered"}</option>`;
+  const placed = offers.filter(d => d.location?.country);
+  const groups = new Map();
+  placed.sort((a, b) => a.location.country.localeCompare(b.location.country) || a.tailnet.localeCompare(b.tailnet) ||
+    (a.location.city || "").localeCompare(b.location.city || "") || a.name.localeCompare(b.name));
+  for (const d of placed) {
+    const k = `${d.location.country} (${d.tailnet})`;
+    groups.set(k, [...(groups.get(k) || []), d]);
+  }
+  const opts = `<option value="">None</option>` +
+    offers.filter(d => !d.location?.country).map(d => opt(d, `${d.name} (${d.tailnet})`)).join("") +
+    [...groups].map(([k, ds]) => `<optgroup label="${esc(k)}">` +
+      ds.map(d => opt(d, d.location.city ? `${d.location.city}: ${d.name}` : d.name)).join("") + `</optgroup>`).join("");
   if ($("exitnode").dataset.opts !== opts) { $("exitnode").innerHTML = opts; $("exitnode").dataset.opts = opts; }
   $("exitnode").value = ex ? ex.tailnet + "/" + ex.peer : "";
   $("exitnode").disabled = s.stopped;

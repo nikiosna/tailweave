@@ -36,6 +36,18 @@ type Peer struct {
 	Routes  []netip.Prefix // subnet routes this peer is the primary router for
 	Online  bool
 	Exit    bool // offers itself as exit node (advertised and approved)
+	// Location is where the node says it is; set for Mullvad's exit nodes, for example.
+	Location *Location
+}
+
+// Location is a node's place as it declares it, to group exit nodes by country and city.
+type Location struct {
+	Country     string `json:"country,omitempty"`     // e.g. "Germany"
+	CountryCode string `json:"countryCode,omitempty"` // ISO 3166-1 alpha-2, e.g. "DE"
+	City        string `json:"city,omitempty"`        // e.g. "Frankfurt"
+	CityCode    string `json:"cityCode,omitempty"`    // e.g. "FRA"; tells cities of the same name apart
+	// Priority ranks exit nodes of one place: the highest one is the best choice.
+	Priority int `json:"priority,omitempty"`
 }
 
 // IPv4 returns the peer's tailnet IPv4 address, or the zero Addr.
@@ -100,6 +112,7 @@ type Device struct {
 	Mapping  *Mapping   `json:"mapping,omitempty"`
 	Routes   []Route    `json:"routes,omitempty"`   // subnet routes of the device
 	ExitNode bool       `json:"exitNode,omitempty"` // offers itself as exit node
+	Location *Location  `json:"location,omitempty"` // where it says it is, if it does
 }
 
 // Route is a subnet route of a device and where it is reachable on this machine.
@@ -335,6 +348,7 @@ func Compute(tailnets []Tailnet, mappings []Mapping, opt Options) Plan {
 			}
 			d.Routes = routes[k]
 			d.ExitNode = pe.Exit
+			d.Location = pe.Location
 			p.Devices = append(p.Devices, d)
 
 			name := normName(pe.DNSName)

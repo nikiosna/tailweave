@@ -59,7 +59,8 @@ no personal paths. Commit locally only; pushing is done by the maintainer.
      setup down (instances, DNS, backend), so another VPN can run; kept in the state
      across restarts; start runs preflight again (`TestStopStart`)
    - [x] Exit nodes: the user picks at most one (`tailweave set -exit-node=<tailnet>/<device>`,
-     the picker `tailweave exit-node`, or the web UI); the host's internet traffic goes into
+     the picker `tailweave exit-node`, a tree by country and city for exit nodes with a
+     location like Mullvad's, or the web UI); the host's internet traffic goes into
      that tailnet, the rest stays merged and the LAN local; fail closed while it is not
      available (conflict `exit`); IPv6 internet blocked meanwhile (`TestExitNode` on both
      backends and macOS, `TestIsolation/exit_node`)
