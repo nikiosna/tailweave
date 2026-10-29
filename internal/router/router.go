@@ -250,15 +250,13 @@ func translate(a netip.Addr, to netip.Prefix) netip.Addr {
 
 // Run reads packets from the host TUN until it is closed, then returns nil.
 func (r *Router) Run() error {
-	batch := r.host.BatchSize()
-	bufs := make([][]byte, batch)
-	sizes := make([]int, batch)
-	for i := range bufs {
-		bufs[i] = make([]byte, headroom+MTU)
-	}
+	// Linux TUNs with offloads hand over up to 64 KiB at once, split into packets with
+	// tun.ReadPacketSpacing between them; this is the size wireguard-go reads with.
+	slab := make([]byte, 2*(1<<16-1))
+	packets := make([]tun.ReadPacket, r.host.BatchSize())
 	var q packet.Parsed
 	for {
-		n, err := r.host.Read(bufs, sizes, headroom)
+		n, err := r.host.Read(slab, packets)
 		if err != nil {
 			if errors.Is(err, os.ErrClosed) {
 				return nil
@@ -269,7 +267,8 @@ func (r *Router) Run() error {
 			return err
 		}
 		for i := range n {
-			r.fromHost(&q, bufs[i][headroom:headroom+sizes[i]])
+			p := packets[i]
+			r.fromHost(&q, slab[p.Offset:p.Offset+p.Size])
 		}
 	}
 }

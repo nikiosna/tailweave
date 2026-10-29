@@ -15,7 +15,7 @@ tailweave has two backends; the config field `backend` picks one.
 | Platform | Backend | Needs |
 | --- | --- | --- |
 | Linux | `tsnet` (recommended for a first try) | `/dev/net/tun`, iproute2, systemd-resolved |
-| Linux | `netns` (default on Linux) | `tailscale` and `tailscaled` 1.102.5 in `PATH`, iproute2, nftables, systemd-resolved |
+| Linux | `netns` (default on Linux) | `tailscale` and `tailscaled` 1.104.4 in `PATH`, iproute2, nftables, systemd-resolved |
 | macOS (arm64, amd64) | `tsnet` (the only one) | nothing extra; uses utun, `route`, `ifconfig` and `scutil` |
 
 - **tsnet** runs one Tailscale engine per tailnet inside the daemon, behind a single

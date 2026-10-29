@@ -45,24 +45,34 @@ func (d *device) queue(pkt []byte) {
 
 func (d *device) File() *os.File { return nil }
 
-func (d *device) Read(bufs [][]byte, sizes []int, offset int) (int, error) {
+func (d *device) Read(slab []byte, packets []tun.ReadPacket) (int, error) {
+	// Packets go into slab one after another, each preceded and the last followed by
+	// tun.ReadPacketSpacing bytes. A packet is only taken from the queue while one of
+	// MTU size still fits.
+	off := tun.ReadPacketSpacing
+	fits := func() bool { return off+MTU+tun.ReadPacketSpacing <= len(slab) }
+	if len(packets) == 0 || !fits() {
+		return 0, tun.ErrTooManySegments
+	}
 	select {
 	case <-d.closed:
 		return 0, os.ErrClosed
 	case pkt := <-d.in:
-		sizes[0] = copy(bufs[0][offset:], pkt)
-		n := 1
-		// Hand over whatever else is already waiting, up to the batch size.
-		for n < len(bufs) {
+		n := 0
+		for {
+			packets[n] = tun.ReadPacket{Offset: off, Size: copy(slab[off:off+MTU], pkt)}
+			off += packets[n].Size + tun.ReadPacketSpacing
+			n++
+			// Hand over whatever else is already waiting, up to the batch size.
+			if n == len(packets) || !fits() {
+				return n, nil
+			}
 			select {
-			case pkt := <-d.in:
-				sizes[n] = copy(bufs[n][offset:], pkt)
-				n++
+			case pkt = <-d.in:
 			default:
 				return n, nil
 			}
 		}
-		return n, nil
 	}
 }
 

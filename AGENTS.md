@@ -283,7 +283,7 @@ Keep this list current when finishing or starting a step.
 - Lima mounts the repository at `/Volumes/My Shared Files/lima-<hash>` in macOS guests;
   `mac-setup.sh` symlinks it to its host path. The macOS installer needs a display, so
   `make mac-vm-up` creates the VM with one and then switches to `video.display: none`.
-- Pinned versions: headscale 0.29.4, tailscale 1.102.5 (also the `tailscale.com` Go
-  module), Dex v2.45.0, Go 1.27.2, Playwright 1.64.0 (in `lab/compose.yaml`,
+- Pinned versions: headscale 0.29.4, tailscale 1.104.4 (also the `tailscale.com` Go
+  module), Dex v2.45.0, Go 1.27.3, Playwright 1.64.0 (in `lab/compose.yaml`,
   `lab/lima/tailweave.yaml`, `lab/scripts/common.sh`, `go.mod`, CI), macOS 27 for the
   macOS VM. Bump them together.

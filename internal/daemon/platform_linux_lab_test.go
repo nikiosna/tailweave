@@ -52,7 +52,12 @@ func assertHostClean(t *testing.T) {
 			}
 		}
 		for _, table := range []string{"5180", "5181"} {
-			if out := labtest.Run(t, "ip", family, "route", "show", "table", table); out != "" {
+			// A table that never had a route since boot does not exist; ip then fails.
+			out, err := labtest.Output("ip", family, "route", "show", "table", table)
+			if err != nil && strings.Contains(out, "FIB table does not exist") {
+				continue
+			}
+			if err != nil || out != "" {
 				t.Errorf("ip %s routes left in table %s:\n%s", family, table, out)
 			}
 		}

@@ -23,8 +23,8 @@ x-peer: &peer
   build:
     context: ./peer
     args:
-      TAILSCALE_VERSION: v${TAILSCALE_VERSION:-1.102.5}
-  image: tailweave-lab-peer:${TAILSCALE_VERSION:-1.102.5}
+      TAILSCALE_VERSION: v${TAILSCALE_VERSION:-1.104.4}
+  image: tailweave-lab-peer:${TAILSCALE_VERSION:-1.104.4}
   restart: unless-stopped
   devices:
     - /dev/net/tun:/dev/net/tun
@@ -184,7 +184,7 @@ services:
   # The address sits behind inet's wan address, one hop away from the exit nodes: an exit
   # node does not let its clients into networks it is attached to.
   inet:
-    image: tailweave-lab-peer:${TAILSCALE_VERSION:-1.102.5}
+    image: tailweave-lab-peer:${TAILSCALE_VERSION:-1.104.4}
     profiles: [exit-nodes]
     container_name: inet
     hostname: inet
