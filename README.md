@@ -1,16 +1,24 @@
 # tailweave
 
-Be a real node in several tailnets at once: with TUN, UDP and MagicDNS, no proxy.
-tailweave detects conflicts between the tailnets, shows them, and lets you resolve
-them.
+Be in your work tailnet and your home tailnet at the same time, on one machine, with
+everything working: ping, UDP, WebRTC, MagicDNS names. tailweave makes this machine a
+real node in several tailnets at once, with a TUN and no proxy. When the tailnets get in
+each other's way, for example with the same IPs, it detects that, shows it, and resolves
+it.
 
-> [!WARNING]
-> **Status: heavily experimental.** This is just another AI-created code
-> project. So far, I have only tested the macOS version in real-world use. Manage your
-> expectations accordingly.
+> [!NOTE]
+> **Status: early.** tailweave works on macOS in real use: logged into Tailscale's
+> control server and a self-hosted headscale at the same time. On Linux it passes the
+> full lab test suite but has seen little real-world use so far. Expect rough edges.
 >
-> Development is AI-driven and validated mostly by tests in VMs: a Linux VM running a
-> lab with two headscale servers and their peers, and a macOS VM. See [AGENTS.md](AGENTS.md).
+> Most of the code is written with an AI coding agent and checked by integration tests
+> in VMs: a Linux VM with a lab of two headscale servers and their peers, and a macOS
+> VM. See [AGENTS.md](AGENTS.md).
+
+## Why
+
+A Tailscale client can only be in one tailnet at a time. Proxy-based workarounds only
+forward TCP, so WebRTC, QUIC and programs without proxy support don't work through them.
 
 ## Install
 
@@ -26,12 +34,42 @@ sudo tailweave set -operator=$USER   # optional: then login, map etc. work witho
 Requirements, the service, configuration, first steps and known limitations:
 [docs/install.md](docs/install.md).
 
-## Why
+## What it looks like
 
-A Tailscale client can only be in one tailnet at a time. Proxy-based workarounds only
-forward TCP, so WebRTC, QUIC and programs without proxy support don't work through them.
+Two tailnets whose peers all have the same IPs (from the development lab):
 
-## How it is supposed to work
+```
+$ tailweave status
+auto-mapping on, DNS on 100.100.100.100, pool 198.18.0.0/15, no conflicts
+
+a  Running  a.lab  dut-a  100.64.0.5  4 of 4 online
+  peer-a1   100.64.0.1
+  peer-a2   100.64.0.2
+  router-a  100.64.0.3
+            10.99.0.0/24                      route
+            fd7a:115c:a1e0:b1a:0:7:a63:0/120  route
+  exit-a    100.64.0.4                        exit node
+
+b  Running  b.lab  dut-b  100.64.0.6  5 of 5 online
+  peer-b1   198.18.0.1 ← 100.64.0.1           auto
+  peer-b2   198.18.0.2 ← 100.64.0.2           auto
+  router-b  198.18.0.3 ← 100.64.0.3           auto
+            198.18.1.0/24 ← 10.99.0.0/24      route, auto
+            198.18.2.0/24 ← 192.168.104.0/24  route, auto
+            fd7a:115c:a1e0:b1a:0:8:a63:0/120  route
+  exit-b    198.18.0.4 ← 100.64.0.4           auto, exit node
+  peer-b3   100.64.0.5
+
+$ curl peer-a1.a.lab; curl peer-b1.b.lab
+peer-a1
+peer-b1
+```
+
+Tailnet `a` is listed first and keeps its IPs. The peers of `b` that collide with it
+are remapped into `198.18.0.0/15`, and so is its subnet route. Names always resolve to
+the address a device is reachable at.
+
+## How it works
 
 ![This machine runs one Tailscale instance per tailnet behind the tailweave router; both
 tailnets have a peer at 100.64.0.1, the one in home appears locally as 198.18.0.1; the
@@ -52,18 +90,26 @@ tailnets do not reach each other, and the LAN does not reach them](docs/how-it-w
   If it goes away, internet traffic is blocked rather than leaving directly.
 - **Own DNS service** replacing MagicDNS: names always resolve to the IP the device is
   actually reachable at, so collisions only matter when you type raw IPs.
-- **Daemon with a CLI:** `tailweave login <name>` adds a tailnet (web link or
-  `-auth-key <key>`), `tailweave status` shows tailnets, peers and conflicts,
-  `tailweave set -auto-map=...` switches auto-mapping, `tailweave map`/`unmap` map
-  devices by hand, `tailweave exit-node` (or `set -exit-node=<tailnet>/<device>`) picks
-  the exit node, grouped by country and city where exit nodes say where they are
-  (Mullvad), `logout`/`remove` leave a tailnet, `stop`/`start` switch tailweave
-  off for another VPN and on again. `tailweave ui` starts an optional
-  web UI showing the same.
+- **A daemon with a CLI** (below); `tailweave ui` starts an optional web UI showing the
+  same.
 
 ![Every peer of the tailnets work and home is a thread that tailweave weaves into one
 address space on this machine; each peer keeps its IP, only nas in home, whose
 100.64.0.1 is already taken by build in work, is woven in at 198.18.0.1](docs/weaving.svg)
+
+## Commands
+
+| Command | What it does |
+| --- | --- |
+| `tailweave run` | The daemon; usually started as a service |
+| `tailweave login <name>` | Add a tailnet, via web link or `-auth-key <key>` |
+| `tailweave status` | Tailnets, peers and conflicts |
+| `tailweave map` / `unmap` | Map a device or subnet route to another IP by hand, or undo it |
+| `tailweave set -auto-map=...` | Turn automatic remapping on or off |
+| `tailweave exit-node` | Pick an exit node, grouped by country and city where exit nodes say where they are (Mullvad); also `set -exit-node=<tailnet>/<device>` |
+| `tailweave logout` / `remove` | Leave a tailnet, or forget it entirely |
+| `tailweave stop` / `start` | Switch tailweave off to make room for another VPN, and on again |
+| `tailweave ui` | Optional web UI |
 
 ## What reaches what
 
@@ -108,48 +154,13 @@ any two VPNs running side by side.
 | Several exit nodes | You pick at most one; while it is not available, internet traffic is blocked |
 | Same DNS names | The tailnet listed first wins |
 
-## Development lab
+## Development
 
-`lab/` contains a reproducible test setup: two [headscale](https://github.com/juanfont/headscale)
-servers with **deliberately identical IP ranges**, tailscale peers in each tailnet
-offering TCP, UDP and iperf3 test services, and scenarios for the conflicts above.
-
-```
-              DUT (tailweave / playground: one tailscaled per netns)
-                 │ docker bridge 172.30.0.0/24
- ┌───────────────┼───────────────────────────────┐
- headscale-a (172.30.0.10)       headscale-b (172.30.0.11)
- peer-a1 100.64.0.1              peer-b1 100.64.0.1
- peer-a2 100.64.0.2              peer-b2 100.64.0.2
- router-a  10.99.0.0/24          router-b  10.99.0.0/24, 192.168.104.0/24
- exit-a    exit node             exit-b    exit node
-                 │ wan 203.0.113.0/24 (exit nodes only)
-                 inet 198.51.100.10: answers with the exit node it came through
-```
-
-```sh
-make vm-up                    # Linux VM via Lima; all targets run inside it
-make lab-up SCENARIO=all      # base | subnets | exit-nodes | dns-suffix | all
-make lab-status
-make run                      # the tailweave daemon
-make lab-login                # second shell: log it into both tailnets
-make sh                       # second shell: sudo bin/tailweave status
-make ui                       # optional web UI on 127.0.0.1:5250 (make ui-tunnel)
-make test-lab
-make ui-check                 # click through the UI in headless Chromium
-make lab-reset
-```
-
-On an Apple Silicon Mac, a second VM runs macOS as the device under test, against the
-same lab:
-
-```sh
-make mac-vm-up                # macOS VM via Lima, routed to the lab in the Linux VM
-make mac-test-lab
-make mac-run                  # the daemon in the macOS VM; make mac-login, make mac-sh
-```
-
-See [CONTRIBUTING.md](CONTRIBUTING.md) for requirements.
+tailweave is tested against a reproducible lab in a Linux VM: two
+[headscale](https://github.com/juanfont/headscale) servers with **deliberately identical
+IP ranges**, peers in each tailnet with test services, and scenarios for every conflict
+above. A second VM runs macOS against the same lab. Setup and commands are in
+[CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## License
 

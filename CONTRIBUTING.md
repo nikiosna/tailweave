@@ -1,8 +1,5 @@
 # Contributing
 
-tailweave is at an early, experimental stage. Issues and ideas are welcome;
-for larger changes please open an issue first.
-
 ## Development setup
 
 Everything runs on Linux, inside a [Lima](https://lima-vm.io) VM. The Makefile
@@ -32,6 +29,38 @@ Linux VM:
 make mac-vm-up      # create the macOS VM (downloads a ~17 GB restore image once)
 make mac-test-lab   # integration tests in the macOS VM
 ```
+
+## The lab
+
+`lab/` contains two [headscale](https://github.com/juanfont/headscale) servers with
+**deliberately identical IP ranges**, tailscale peers in each tailnet offering TCP, UDP
+and iperf3 test services, and scenarios for the conflicts tailweave detects.
+
+```
+              DUT (tailweave / playground: one tailscaled per netns)
+                 │ docker bridge 172.30.0.0/24
+ ┌───────────────┼───────────────────────────────┐
+ headscale-a (172.30.0.10)       headscale-b (172.30.0.11)
+ peer-a1 100.64.0.1              peer-b1 100.64.0.1
+ peer-a2 100.64.0.2              peer-b2 100.64.0.2
+ router-a  10.99.0.0/24          router-b  10.99.0.0/24, 192.168.104.0/24
+ exit-a    exit node             exit-b    exit node
+                 │ wan 203.0.113.0/24 (exit nodes only)
+                 inet 198.51.100.10: answers with the exit node it came through
+```
+
+```sh
+make lab-up SCENARIO=all      # base | subnets | exit-nodes | dns-suffix | all
+make lab-status
+make run                      # the tailweave daemon
+make lab-login                # second shell: log it into both tailnets
+make sh                       # second shell: sudo bin/tailweave status
+make ui                       # optional web UI on 127.0.0.1:5250 (make ui-tunnel)
+make ui-check                 # click through the UI in headless Chromium
+make mac-run                  # the daemon in the macOS VM; make mac-login, make mac-sh
+```
+
+`make help` lists all targets; [AGENTS.md](AGENTS.md) describes the lab in detail.
 
 ## Conventions
 
