@@ -46,7 +46,8 @@ commands:
                                      and DNS, so another VPN can run; the daemon stays
   start                              switch tailweave on again
   status [<tailnet>] [-a] [-json]    tailnets, devices and conflicts; -a also lists
-                                     offline devices
+                                     offline devices and exit nodes with a
+                                     location (Mullvad's)
   set -auto-map=<true|false>         remap colliding devices automatically or not
   set -operator=<user>               let a user change tailweave without sudo
                                      (root only; -operator= removes it)
@@ -205,7 +206,7 @@ func startDaemon(ctx context.Context, args []string) error {
 func status(ctx context.Context, args []string) error {
 	fs, socket := flags("status")
 	asJSON := fs.Bool("json", false, "print the daemon's state as JSON")
-	all := fs.Bool("a", false, "also list offline devices that need no attention")
+	all := fs.Bool("a", false, "also list offline devices and exit nodes with a location that need no attention")
 	if err := parse(fs, args, 0, 1); err != nil {
 		return err
 	}

@@ -111,6 +111,44 @@ func TestPrintStatus(t *testing.T) {
 	}
 }
 
+func TestPrintStatusLocatedExitNodes(t *testing.T) {
+	de := &weave.Location{Country: "Germany", CountryCode: "DE", City: "Berlin", CityCode: "BER"}
+	dev := func(id, name, ip string, exit bool, loc *weave.Location) weave.Device {
+		a := netip.MustParseAddr(ip)
+		return weave.Device{Tailnet: "a", PeerID: id, Name: name, Online: true, RealIP: a, RoutedIP: a, ExitNode: exit, Location: loc}
+	}
+	s := daemon.State{
+		Tailnets: []daemon.TailnetState{{Name: "a", State: "Running"}},
+		Devices: []weave.Device{
+			dev("1", "laptop", "100.64.0.1", false, nil),
+			dev("2", "home", "100.64.0.2", true, nil),
+			dev("3", "de-ber-wg-001", "100.64.0.3", true, de),
+			dev("4", "de-ber-wg-002", "100.64.0.4", true, de),
+			dev("5", "de-ber-wg-003", "100.64.0.5", true, de),
+		},
+		ExitNode: &weave.Exit{Tailnet: "a", PeerID: "5", Name: "de-ber-wg-003", Available: true},
+	}
+	var b bytes.Buffer
+	printStatus(&b, s, statusOptions{})
+	out := b.String()
+	for _, want := range []string{"laptop", "home ", "exit node\n", "de-ber-wg-003", "exit node in use", "3 of 3 online",
+		"  … 2 exit nodes with a location, see `tailweave exit-node` or show with -a\n"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("status lacks %q:\n%s", want, out)
+		}
+	}
+	for _, unwanted := range []string{"de-ber-wg-001", "de-ber-wg-002"} {
+		if strings.Contains(out, unwanted) {
+			t.Errorf("status shows %q:\n%s", unwanted, out)
+		}
+	}
+	b.Reset()
+	printStatus(&b, s, statusOptions{all: true})
+	if out := b.String(); !strings.Contains(out, "de-ber-wg-001") || !strings.Contains(out, "5 of 5 online") || strings.Contains(out, "with a location") {
+		t.Errorf("status -a:\n%s", out)
+	}
+}
+
 func TestPickDevice(t *testing.T) {
 	for _, tc := range []struct{ tailnet, device, want string }{
 		{"b", "peer-b1", "1"},

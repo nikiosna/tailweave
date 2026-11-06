@@ -16,7 +16,7 @@ import (
 
 // statusOptions select what printStatus shows.
 type statusOptions struct {
-	all     bool   // also offline devices that are routed at their real IP
+	all     bool   // also offline devices and exit nodes with a location that need no attention
 	tailnet string // only this tailnet, if set
 	color   bool   // ANSI colors
 }
@@ -30,8 +30,10 @@ const (
 )
 
 // printStatus writes the daemon's state, grouped by tailnet. Devices show their real
-// IP only where it differs from the one they are reachable at; offline devices without
-// a mapping are only counted unless o.all is set.
+// IP only where it differs from the one they are reachable at. Unless o.all is set,
+// offline devices without a mapping are only counted, and so are exit nodes with a
+// location (Mullvad's, hundreds of them), which the exit node picker lists; those are
+// not counted as devices online either.
 func printStatus(w io.Writer, s daemon.State, o statusOptions) {
 	p := printer{w, o.color}
 	if s.Stopped {
@@ -73,7 +75,8 @@ func printStatus(w io.Writer, s daemon.State, o statusOptions) {
 	type group struct {
 		head    row
 		devices []row
-		hidden  int
+		hidden  int // offline devices
+		exits   int // exit nodes with a location
 	}
 	var groups []group
 	var heads, devices []row
@@ -86,6 +89,12 @@ func printStatus(w io.Writer, s daemon.State, o statusOptions) {
 		for _, d := range s.Devices {
 			if d.Tailnet != t.Name {
 				continue
+			}
+			if locatedExit(d, s.ExitNode) {
+				g.exits++
+				if !o.all {
+					continue
+				}
 			}
 			total++
 			if d.Online {
@@ -127,6 +136,9 @@ func printStatus(w io.Writer, s daemon.State, o statusOptions) {
 		if g.hidden > 0 {
 			p.line(dim, "  … %d offline, show with -a", g.hidden)
 		}
+		if g.exits > 0 && !o.all {
+			p.line(dim, "  … %d exit nodes with a location, see `tailweave exit-node` or show with -a", g.exits)
+		}
 	}
 }
 
@@ -161,6 +173,13 @@ func deviceRow(d weave.Device, open []weave.Conflict, exit *weave.Exit) row {
 		}
 	}
 	return row{name, addr, {strings.Join(notes, ", "), style}}
+}
+
+// locatedExit reports whether d is an exit node with a location, like Mullvad's, that
+// needs no attention: not in use, routed at its real IP and without subnet routes.
+func locatedExit(d weave.Device, e *weave.Exit) bool {
+	return d.ExitNode && d.Location != nil && !usedExit(e, d) &&
+		d.Mapping == nil && d.RoutedIP.IsValid() && d.RoutedIP == d.RealIP && len(d.Routes) == 0
 }
 
 // usedExit reports whether d is the exit node in use.
